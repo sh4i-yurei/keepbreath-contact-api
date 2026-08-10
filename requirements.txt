@@ -1,0 +1,9 @@
+# keepbreath.ing — contact API dependencies
+# (smtplib and email are in the Python standard library; the third-party
+#  pieces are the web framework, its server, and the email-validation lib.)
+# TODO: pin exact versions together once we install (pip freeze).
+Flask
+gunicorn
+email-validator
+altcha>=1.0.0
+structlog

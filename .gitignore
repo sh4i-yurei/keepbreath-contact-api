@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+venv/
+.venv/
+
+# Secrets — SMTP credentials + the ALTCHA HMAC key live in an env file
+# (e.g. contact-api.env) that is injected at runtime and MUST NEVER be committed.
+.env
+*.env
+*.local
+
+# SQLite replay database (runtime state, not source) + its WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
