@@ -1,0 +1,32 @@
+# Keep the build context (and the image) clean — only the app source belongs
+# in the image. Mirrors .gitignore for the sensitive bits so secrets and the
+# runtime DB can never be baked into a layer. (This one is filled in, not TODO:
+# it's safety boilerplate, same as .gitignore.)
+
+# Version control
+.git
+.gitignore
+
+# Python cruft
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+
+# Secrets + runtime state — MUST never enter the image
+*.env
+*.local
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Not needed inside the runtime image
+README.md
+deploy/
+Dockerfile
+docker-compose.yml

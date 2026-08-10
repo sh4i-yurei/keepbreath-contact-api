@@ -1,0 +1,31 @@
+# ============================================================
+# keepbreath.ing — contact API (docker-compose.yml)
+# Author: Mark Thompson
+# ============================================================
+# Runs the contact-api container and joins the SHARED network that the
+# nginx (web) container is also on, so nginx can proxy to it by name.
+# Scaffold — values filled in together.
+
+
+# TODO: services:
+#   contact-api:
+#     build: .                         # build from this repo's Dockerfile
+#     restart: unless-stopped
+#     env_file: contact-api.env        # SMTP creds + ALTCHA_HMAC_KEY + REPLAY_DB_PATH (gitignored)
+#     extra_hosts:
+#       - "mail.keepbreath.ing:host-gateway"   # reach the host's Postfix with a valid cert name
+#     volumes:
+#       - contact-api-data:/data       # SQLite replay DB lives here (REPLAY_DB_PATH) — survives restarts
+#     networks:
+#       - keepbreath-net               # the shared external network
+#     # NO published ports — only nginx reaches it, over the shared network
+
+
+# TODO: volumes:
+#   contact-api-data:                  # named volume for the replay DB
+
+
+# TODO: networks:
+#   keepbreath-net:
+#     external: true                   # created once on the droplet:  docker network create keepbreath-net
+#                                      # (the site's web compose also joins this network)
