@@ -1,9 +1,10 @@
 # keepbreath.ing — contact API dependencies
-# (smtplib and email are in the Python standard library; the third-party
-#  pieces are the web framework, its server, and the email-validation lib.)
-# TODO: pin exact versions together once we install (pip freeze).
-Flask
-gunicorn
-email-validator
-altcha>=1.0.0
-structlog
+# smtplib and email are in the Python standard library; these are the third-party
+# pieces (web framework, its server, email validation, bot defense, logging).
+# Pinned to exact versions for reproducible builds (resolved 2026-08-14). altcha is
+# pinned exact and stays at/above 1.0.0 — the security floor for CVE-2025-68113.
+Flask==3.1.3
+gunicorn==26.0.0
+email-validator==2.3.0
+altcha==2.1.0
+structlog==26.1.0
