@@ -10,6 +10,7 @@
 # Flask, plus the standard-library mail tools.
 # ------------------------------------------------------------
 import base64
+import binascii
 import json
 import os
 import smtplib
@@ -21,6 +22,7 @@ from email.message import EmailMessage
 
 import structlog
 from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
 from email_validator import validate_email, EmailNotValidError
 from altcha import create_challenge, verify_solution
 
@@ -86,6 +88,25 @@ def bind_request_id():
     # fresh request-id per request so every log line in it can be correlated
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(request_id=str(uuid.uuid4()))
+
+
+# ------------------------------------------------------------
+# ERROR HANDLERS
+# This is an API — every response is JSON, including errors. Without these,
+# Flask returns its HTML error pages (e.g. the 16 KB body cap trips an HTML 413).
+# ------------------------------------------------------------
+@app.errorhandler(HTTPException)
+def handle_http_error(e):
+    # covers 400 / 404 / 405 / 413 / etc. — reason as JSON, original status kept.
+    return jsonify({"ok": False, "error": e.name}), e.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    # anything that isn't already an HTTPException is an unhandled 500; log it
+    # (with the request-id) but never leak internals back to the caller.
+    log.exception("unhandled_error")
+    return jsonify({"ok": False, "error": "internal server error"}), 500
 
 
 # ------------------------------------------------------------
@@ -215,7 +236,12 @@ def contact():
 
     # single-use: a valid token that's already been accepted is a replay. Key the
     # registry on the challenge signature (base64-JSON payload -> "signature").
-    signature = json.loads(base64.b64decode(altcha_token))["signature"]
+    # Guard the decode: a malformed token is a rejection, not a 500.
+    try:
+        signature = json.loads(base64.b64decode(altcha_token))["signature"]
+    except (binascii.Error, ValueError, KeyError, TypeError):
+        log.info("altcha_malformed")
+        return jsonify({"ok": False, "error": "verification failed"}), 400
     reserve_until = int(
         (datetime.now(timezone.utc) + timedelta(minutes=25)).timestamp()
     )
