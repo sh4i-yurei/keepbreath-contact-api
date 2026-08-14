@@ -10,7 +10,19 @@
 # BASE IMAGE
 # A slim Python base keeps the image small and the attack surface low.
 # ------------------------------------------------------------
-# TODO: FROM python:3.13-slim  (match the version we develop against)
+
+FROM python:3.13-slim
+
+
+# ------------------------------------------------------------
+# PYTHON ENV
+# PYTHONUNBUFFERED: don't buffer stdout — so our structlog JSON reaches
+# `docker logs` immediately (buffered logs can be lost on a crash). This one
+# matters given our whole logging strategy is "structured logs to stdout."
+# PYTHONDONTWRITEBYTECODE: skip writing .pyc files into the image.
+# ------------------------------------------------------------
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 
 # ------------------------------------------------------------
@@ -18,29 +30,38 @@
 # Copy requirements FIRST and install, so Docker caches this layer and
 # doesn't reinstall every time the app code changes.
 # ------------------------------------------------------------
-# TODO: WORKDIR /app
-# TODO: COPY requirements.txt .
-# TODO: RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 
 # ------------------------------------------------------------
 # APP SOURCE
 # Copy only what the app needs (the .dockerignore keeps the rest out).
 # ------------------------------------------------------------
-# TODO: COPY app.py replay.py ./
+COPY app.py replay.py ./
 
 
 # ------------------------------------------------------------
 # RUNTIME USER
 # Run as a non-root user — least privilege if the app is ever compromised.
 # ------------------------------------------------------------
-# TODO: create a non-root user and USER it
-
+RUN useradd --create-home appuser \
+    && mkdir -p /data \
+    && chown -R appuser:appuser /app /data
+USER appuser
 
 # ------------------------------------------------------------
 # START
 # gunicorn serves app:app on the port nginx proxies to over the shared
 # network. Tune workers/timeout for the blocking SMTP send (review note).
 # ------------------------------------------------------------
-# TODO: EXPOSE 8000
-# TODO: CMD ["gunicorn", "-b", "0.0.0.0:8000", "app:app", "--workers", "?", "--timeout", "?"]
+EXPOSE 8000
+
+# Liveness probe — a plain Python request (no need to install curl in the slim
+# image). If /health can't be reached or returns non-2xx, urlopen raises and the
+# check exits non-zero → Docker marks the container unhealthy.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "app:app", "--workers", "2", "--timeout", "30"]

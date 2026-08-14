@@ -89,6 +89,15 @@ def bind_request_id():
 
 
 # ------------------------------------------------------------
+# HEALTH — liveness probe for the Docker HEALTHCHECK / uptime monitoring.
+# Deliberately lightweight: confirms the process is up, doesn't touch SMTP/DB.
+# ------------------------------------------------------------
+@app.route("/health")
+def health():
+    return jsonify({"ok": True}), 200
+
+
+# ------------------------------------------------------------
 # VALIDATION
 # Server-side checks on the submitted data (never trust the client).
 # ------------------------------------------------------------

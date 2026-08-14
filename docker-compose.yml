@@ -7,25 +7,34 @@
 # Scaffold — values filled in together.
 
 
-# TODO: services:
-#   contact-api:
-#     build: .                         # build from this repo's Dockerfile
-#     restart: unless-stopped
-#     env_file: contact-api.env        # SMTP creds + ALTCHA_HMAC_KEY + REPLAY_DB_PATH (gitignored)
-#     extra_hosts:
-#       - "mail.keepbreath.ing:host-gateway"   # reach the host's Postfix with a valid cert name
-#     volumes:
-#       - contact-api-data:/data       # SQLite replay DB lives here (REPLAY_DB_PATH) — survives restarts
-#     networks:
-#       - keepbreath-net               # the shared external network
-#     # NO published ports — only nginx reaches it, over the shared network
+services:
+  contact-api:
+    build: .                         # build from this repo's Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"     # container can't gain more privileges than it starts with
+    cap_drop:
+      - ALL                          # drop every Linux capability — the app needs none
+    env_file: contact-api.env        # SMTP creds + ALTCHA_HMAC_KEY + REPLAY_DB_PATH (gitignored)
+    extra_hosts:
+      - "mail.keepbreath.ing:host-gateway"   # reach the host's Postfix with a valid cert name
+    volumes:
+      - contact-api-data:/data       # SQLite replay DB lives here (REPLAY_DB_PATH) — survives restarts
+    # NO published ports — only nginx reaches it, over the shared network
+    networks:
+      - keepbreath-net               # the shared external network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 
-# TODO: volumes:
-#   contact-api-data:                  # named volume for the replay DB
+volumes:
+  contact-api-data:                  # named volume for the replay DB
 
 
-# TODO: networks:
-#   keepbreath-net:
-#     external: true                   # created once on the droplet:  docker network create keepbreath-net
-#                                      # (the site's web compose also joins this network)
+networks:
+  keepbreath-net:
+    external: true                   # created once on the droplet: docker network create keepbreath-net
+    # (the site's web compose also joins this network)
