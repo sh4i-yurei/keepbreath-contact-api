@@ -15,12 +15,13 @@ import json
 import os
 import smtplib
 import ssl
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 import structlog
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from werkzeug.exceptions import HTTPException
 from email_validator import validate_email, EmailNotValidError
 from altcha import create_challenge, verify_solution
@@ -87,6 +88,33 @@ def bind_request_id():
     # fresh request-id per request so every log line in it can be correlated
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(request_id=str(uuid.uuid4()))
+    # start the request timer. perf_counter is a monotonic clock (only ever moves
+    # forward, immune to system-clock changes), which is what you want for measuring
+    # an elapsed interval. after_request reads this back to log the duration.
+    g.request_start = time.perf_counter()
+
+
+@app.after_request
+def log_request_completed(response):
+    # One canonical summary line per request — structlog's recommended pattern: a
+    # single entry carrying method, path, status, and total duration in seconds.
+    # Metadata only (no body, no query content), so no personal data reaches the logs.
+    # Duration is in seconds to match Prometheus base-unit convention, so the future
+    # metrics work reads the same units without renaming anything.
+    # Skip /health: the Docker HEALTHCHECK hits it every 30s, and logging each probe
+    # would bury real traffic under thousands of lines a day.
+    if request.path != "/health":
+        start = getattr(g, "request_start", None)
+        log.info(
+            "request_completed",
+            method=request.method,
+            path=request.path,
+            status=response.status_code,
+            duration_seconds=(
+                round(time.perf_counter() - start, 3) if start is not None else None
+            ),
+        )
+    return response
 
 
 # ------------------------------------------------------------
@@ -248,12 +276,21 @@ def contact():
         log.info("validation_failed", reason=err)
         return jsonify({"ok": False, "error": err}), 400
     msg = build_email(cleaned)
+    # time the send itself, on both paths: a slow *failure* (the mail server
+    # hanging until the timeout) is exactly the signal worth seeing in the logs.
+    send_start = time.perf_counter()
     try:
         send_email(msg)
     except Exception:
-        log.exception("send_failed")
+        log.exception(
+            "send_failed",
+            send_duration_seconds=round(time.perf_counter() - send_start, 3),
+        )
         return jsonify({"ok": False, "error": "failed to send"}), 502
-    log.info("message_sent")
+    log.info(
+        "message_sent",
+        send_duration_seconds=round(time.perf_counter() - send_start, 3),
+    )
     return jsonify({"ok": True}), 200
 
 
