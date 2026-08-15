@@ -7,33 +7,48 @@
 
 # ------------------------------------------------------------
 # BASE IMAGE
-# A slim Python base keeps the image small and the attack surface low.
-# Pinned to a digest for reproducible builds — the tag is documentation, the
-# @sha256 is what actually gets pulled. Re-pin deliberately when updating.
+# Alpine, not Debian slim. A Python API needs Python and its libraries and
+# nothing else — but Debian's base ships Perl, gzip, tar, ncurses, and the
+# login/passwd tooling, none of which this app ever touches and all of which
+# carry their own security vulnerabilities. Alpine ships almost none of it,
+# which took the image from 182 known vulnerabilities to zero. Pinned to a
+# digest for reproducible builds; re-pin deliberately when updating.
 # ------------------------------------------------------------
-
-FROM python:3.13-slim@sha256:8fef26df932191825664e4957ff488c96dfe64918327634a357a55facbc994d3
+FROM python:3.13-alpine@sha256:42825e7ec3437b3bce923c237484eb23d32128476e18307d2f48951bf86f1db2
 
 
 # ------------------------------------------------------------
 # PYTHON ENV
-# PYTHONUNBUFFERED: don't buffer stdout — so our structlog JSON reaches
-# `docker logs` immediately (buffered logs can be lost on a crash). This one
-# matters given our whole logging strategy is "structured logs to stdout."
-# PYTHONDONTWRITEBYTECODE: skip writing .pyc files into the image.
+# PYTHONUNBUFFERED keeps stdout unbuffered, so the structlog JSON reaches
+# `docker logs` immediately (buffered logs can be lost on a crash).
+# PYTHONDONTWRITEBYTECODE skips writing .pyc files into the image.
+# HOME=/tmp exists because gunicorn's control socket wants to live under the
+# home directory, and the home directory sits on the read-only root filesystem.
+# Pointing HOME at the writable in-memory /tmp gives it a legitimate place to
+# write instead of erroring on every boot.
 # ------------------------------------------------------------
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp
 
 
 # ------------------------------------------------------------
 # DEPENDENCIES
-# Copy requirements FIRST and install, so Docker caches this layer and
-# doesn't reinstall every time the app code changes.
+# Copy requirements first and install, so Docker caches this layer and doesn't
+# reinstall every time the app code changes. Then delete pip, setuptools, and
+# wheel: those are only needed to *install* packages, never to *run* the app, so
+# leaving them in the final image would just carry their vulnerabilities for no
+# benefit. (This is what clears the last few findings the base image can't.)
 # ------------------------------------------------------------
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /usr/local/lib/python3.13/site-packages/pip* \
+              /usr/local/lib/python3.13/site-packages/setuptools* \
+              /usr/local/lib/python3.13/site-packages/pkg_resources \
+              /usr/local/lib/python3.13/site-packages/_distutils_hack \
+              /usr/local/lib/python3.13/site-packages/wheel* \
+              /usr/local/bin/pip* /usr/local/bin/wheel*
 
 
 # ------------------------------------------------------------
@@ -45,12 +60,17 @@ COPY app.py replay.py ./
 
 # ------------------------------------------------------------
 # RUNTIME USER
-# Run as a non-root user — least privilege if the app is ever compromised.
+# Run as a non-root user, so a compromise of the app doesn't start as root.
+# Alpine's adduser comes from BusyBox, so its flags differ from Debian's
+# useradd: -D creates the user with no password, and -h sets the home directory.
+# /data is chowned to appuser here so the app can write its replay database once
+# the named volume mounts over that path at runtime.
 # ------------------------------------------------------------
-RUN useradd --create-home appuser \
+RUN adduser -D -h /home/appuser appuser \
     && mkdir -p /data \
     && chown -R appuser:appuser /app /data
 USER appuser
+
 
 # ------------------------------------------------------------
 # START
@@ -62,9 +82,9 @@ USER appuser
 # ------------------------------------------------------------
 EXPOSE 8000
 
-# Liveness probe — a plain Python request (no need to install curl in the slim
+# Liveness probe — a plain Python request (no need to install curl in the minimal
 # image). If /health can't be reached or returns non-2xx, urlopen raises and the
-# check exits non-zero → Docker marks the container unhealthy.
+# check exits non-zero, so Docker marks the container unhealthy.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
