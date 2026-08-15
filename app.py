@@ -16,7 +16,6 @@ import os
 import smtplib
 import ssl
 import uuid
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
@@ -197,7 +196,7 @@ def altcha_challenge():
         hmac_secret=ALTCHA_HMAC_KEY,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=20),
     )
-    return jsonify(asdict(challenge))
+    return jsonify(challenge.to_dict())
 
 
 # ------------------------------------------------------------
@@ -225,12 +224,7 @@ def contact():
     # NOTE: untested until the widget round-trip; replay guard = short expiry for
     # now (a shared used-token store is the follow-up).
     altcha_token = data.get("altcha")
-    if (
-        not altcha_token
-        or not verify_solution(
-            altcha_token, ALTCHA_HMAC_KEY, check_expires=True
-        ).verified
-    ):
+    if not altcha_token or not verify_solution(altcha_token, ALTCHA_HMAC_KEY).verified:
         log.info("altcha_failed")
         return jsonify({"ok": False, "error": "verification failed"}), 400
 
@@ -238,7 +232,7 @@ def contact():
     # registry on the challenge signature (base64-JSON payload -> "signature").
     # Guard the decode: a malformed token is a rejection, not a 500.
     try:
-        signature = json.loads(base64.b64decode(altcha_token))["signature"]
+        signature = json.loads(base64.b64decode(altcha_token))["challenge"]["signature"]
     except (binascii.Error, ValueError, KeyError, TypeError):
         log.info("altcha_malformed")
         return jsonify({"ok": False, "error": "verification failed"}), 400

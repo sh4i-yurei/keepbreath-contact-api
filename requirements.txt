@@ -7,9 +7,8 @@ gunicorn==26.0.0
 email-validator==2.3.0
 structlog==26.1.0
 
-# altcha is deliberately NOT exact-pinned yet. The app's create_challenge /
-# verify_solution calls don't match a single released API (create_challenge args
-# match 2.x; verify_solution's check_expires + .verified do not), so the exact
-# version gets chosen when the ALTCHA integration is reworked and validated
-# against the live widget. Kept >=1.0.0 as the CVE-2025-68113 security floor.
-altcha>=1.0.0
+# altcha is pinned to 2.1.0, the exact version the v2 integration was reworked and
+# validated against: challenge.to_dict() for serialization, verify_solution without
+# check_expires, and the nested {challenge, solution} payload. 2.1.0 is well above
+# 1.0.0, which fixed CVE-2025-68113 (challenge splicing / replay).
+altcha==2.1.0
