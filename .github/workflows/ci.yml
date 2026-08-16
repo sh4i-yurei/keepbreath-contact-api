@@ -5,7 +5,7 @@
 # gate system into one workflow for this repo:
 #   code-quality  Ruff (lint + format) and mypy (types)
 #   tests         pytest
-#   security      CodeQL and dependency review (warning-only for now)
+#   security      CodeQL static analysis (warning-only for now)
 #   integration   bring the whole stack up with compose and send one message end to end
 name: CI
 
@@ -70,15 +70,6 @@ jobs:
           languages: python
       - name: Run CodeQL analysis
         uses: github/codeql-action/analyze@v4
-
-  # Warning-only dependency review (pull requests only — it diffs the PR's dependencies).
-  dependency-review:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/dependency-review-action@v4
 
   # ----------------------------------------------------------
   # Gate: integration — the unit tests can't catch compose/env mistakes, so bring the

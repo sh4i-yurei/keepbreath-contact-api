@@ -16,3 +16,10 @@ ignore_missing_imports = true
 # The pydantic plugin teaches mypy that a Settings() reads its fields from the environment,
 # so an empty constructor call is valid rather than "missing required argument".
 plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+# The modules (replay.py, app.py, ...) live in the repo root, so put it on the import path.
+# Without this, `pytest` run as the console script can't import them (only `python -m pytest`
+# adds the current directory), which is exactly what broke the CI test job.
+pythonpath = ["."]
+testpaths = ["tests"]
