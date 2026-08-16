@@ -5,3 +5,5 @@
 
 pytest==9.1.1
 fakeredis==2.37.0   # in-memory Redis for testing the dead-letter shelf without a real server
+mypy==2.3.1         # static type checker (the code-quality gate runs this)
+ruff==0.16.3        # linter + formatter (the code-quality gate runs this)

@@ -138,6 +138,21 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+## Development
+
+CI runs four gates: Ruff (lint + format), mypy (types), pytest, and a compose integration
+smoke. Run the same checks locally before pushing so nothing is a surprise:
+
+```
+pip install -r requirements-dev.txt
+ruff check . && ruff format --check .
+mypy .
+pytest
+```
+
+The type checker is intentionally lenient (`ignore_missing_imports`) because Flask, Celery,
+altcha and structlog ship no type stubs; that is configured in `pyproject.toml`.
+
 ## Security
 
 - **Server-side validation** (never trust the client): types, length caps, and an RFC-aware

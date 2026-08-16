@@ -18,3 +18,9 @@ altcha==2.1.0
 # holds the pending sends. Pinned exact (resolved 2026-08-15).
 celery==5.6.3
 redis==8.1.0
+
+# pydantic-settings reads and validates configuration from the environment at startup,
+# so a missing or malformed variable fails loudly and clearly instead of at runtime.
+# (pydantic is its validation engine, pinned alongside it.)
+pydantic-settings==2.15.0
+pydantic==2.13.4

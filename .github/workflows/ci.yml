@@ -1,0 +1,137 @@
+# ============================================================
+# keepbreath.ing — contact API CI
+# ============================================================
+# The gates that must pass before code merges. Adapted from the policies-and-standards
+# gate system into one workflow for this repo:
+#   code-quality  Ruff (lint + format) and mypy (types)
+#   tests         pytest
+#   security      CodeQL static analysis and dependency review (warning-only for now)
+#   integration   bring the whole stack up with compose and send one message end to end
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------
+  # Gate: code quality — style, formatting, and types.
+  # ----------------------------------------------------------
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Ruff lint
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+      - name: Mypy
+        run: mypy .
+
+  # ----------------------------------------------------------
+  # Gate: tests — the unit suite (no Redis or worker needed; eager + fakeredis).
+  # ----------------------------------------------------------
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Pytest
+        run: pytest -q
+
+  # ----------------------------------------------------------
+  # Gate: security — CodeQL static analysis. Warning-only for now (does not block).
+  # ----------------------------------------------------------
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+
+  # Warning-only dependency review (pull requests only — it diffs the PR's dependencies).
+  # Requires the repo's Dependency Graph feature to be enabled.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+
+  # ----------------------------------------------------------
+  # Gate: integration — the unit tests can't catch compose/env mistakes, so bring the
+  # real stack up and push one message all the way through. Mail can't be delivered in
+  # CI, so the message shelves; confirming it lands on the shelf proves the whole wiring
+  # (broker URL, Redis auth, the worker importing the task, the read-only containers).
+  # ----------------------------------------------------------
+  integration:
+    # Only run the heavy compose stack once the fast gates pass, to save CI minutes and
+    # keep the failure signal clear.
+    needs: [code-quality, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Write a throwaway .env (dummy values, no real secrets)
+        run: |
+          cat > .env <<'EOF'
+          REDIS_PASSWORD=ci-test-password
+          ALTCHA_HMAC_KEY=ci-test-hmac-key
+          CONTACT_SMTP_USER=contact@example.com
+          CONTACT_SMTP_PASS=ci-dummy-pass
+          EOF
+      - name: Write the smoke script
+        run: |
+          cat > smoke.py <<'EOF'
+          import json, urllib.request
+          from altcha import Challenge, solve_challenge, Payload
+          ch = Challenge.from_dict(json.loads(urllib.request.urlopen("http://localhost:8000/api/challenge").read()))
+          token = Payload(ch, solve_challenge(ch)).to_base64()
+          body = json.dumps({"name": "CI", "email": "ci@example.com", "message": "ci smoke", "altcha": token}).encode()
+          req = urllib.request.Request("http://localhost:8000/api/contact", data=body, headers={"Content-Type": "application/json"}, method="POST")
+          assert urllib.request.urlopen(req).status == 202, "expected 202 Accepted"
+          print("enqueue ok (202)")
+          EOF
+      - name: Create the shared network and bring the stack up
+        run: |
+          docker network create keepbreath-net
+          docker compose up -d --build
+      - name: Smoke — enqueue one message and confirm it is processed
+        run: |
+          for i in $(seq 1 30); do
+            docker compose exec -T contact-api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" 2>/dev/null && break
+            sleep 2
+          done
+          docker compose exec -T contact-api python - < smoke.py
+          for i in $(seq 1 30); do
+            n=$(docker compose exec -T redis redis-cli -a ci-test-password LLEN contact:deadletters 2>/dev/null | tr -d '[:space:]')
+            if [ "$n" = "1" ]; then echo "message processed onto the shelf — pipeline works"; exit 0; fi
+            sleep 2
+          done
+          echo "message was never processed"; docker compose logs; exit 1
+      - name: Tear down
+        if: always()
+        # || true so a failed 'up' (nothing to tear down) can't fail this always() step.
+        run: docker compose down -v || true

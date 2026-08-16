@@ -10,14 +10,17 @@ import os
 
 from celery import Celery
 
-# The "broker" is the queue that holds pending tasks between the web app (which puts
-# tasks in) and the worker (which takes them out). We use Redis for it. The URL comes
-# from the environment so the password is never hard-coded; it falls back to a local
-# Redis so tests and local dev work without any configuration.
-BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+from config import BrokerSettings
 
-# How often the scheduled sweep re-drives the dead-letter shelf, in seconds. Hourly by
-# default; the live test overrides it to a few seconds via the environment.
+# The "broker" is the queue that holds pending tasks between the web app (which puts tasks
+# in) and the worker (which takes them out). We use Redis for it. BrokerSettings validates
+# that CELERY_BROKER_URL is set — for BOTH processes, since both import this module — and
+# fails loudly right here if it isn't, with the embedded password kept out of the error.
+BROKER_URL = BrokerSettings().celery_broker_url
+
+# How often the scheduled sweep re-drives the dead-letter shelf, in seconds. This is an
+# optional operational knob with a sensible default, so it stays a plain environment read
+# rather than required config. The live test overrides it to a few seconds.
 REDRIVE_INTERVAL_SECONDS = float(os.environ.get("REDRIVE_INTERVAL_SECONDS", "3600"))
 
 # include=["tasks"] makes the worker import tasks.py on startup so the task is registered.

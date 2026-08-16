@@ -17,11 +17,14 @@ import smtplib
 import ssl
 import time
 from email.message import EmailMessage
+from functools import lru_cache
+from typing import TypedDict
 
 import redis
 import structlog
 
-from celery_app import celery
+from celery_app import BROKER_URL, celery
+from config import WorkerSettings
 from logging_config import configure_logging
 
 log = configure_logging()
@@ -42,23 +45,38 @@ DEADLETTER_KEY = "contact:deadletters"
 PROCESSING_KEY = "contact:deadletters:processing"
 # How long a message may sit on the shelf before we finally give up on it, loudly. Long
 # on purpose — a mail outage or a config fix should happen well within this. Tunable.
-MAX_SHELF_AGE_SECONDS = int(
-    os.environ.get("DEADLETTER_MAX_AGE_SECONDS", str(3 * 86400))
-)
+MAX_SHELF_AGE_SECONDS = int(os.environ.get("DEADLETTER_MAX_AGE_SECONDS", str(3 * 86400)))
+
+
+class ShelfEntry(TypedDict):
+    """The JSON shape of a dead-letter shelf entry, so the shelver and the sweep share one
+    explicit contract."""
+
+    data: dict
+    request_id: str | None
+    reason: str
+    first_failed_at: float
+    redrive_count: int
 
 
 class TransientSendError(Exception):
     """A failure worth burning a FAST retry on: a network blip, dropped connection, 4xx."""
 
 
-def _redis():
-    # A plain Redis client on the same broker Celery uses, for the dead-letter shelf.
-    return redis.from_url(
-        os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    )
+@lru_cache(maxsize=1)
+def _worker_settings() -> WorkerSettings:
+    # Built lazily and cached, so the web app (which imports this module only to enqueue)
+    # never constructs it, and the worker reads its mail credentials once.
+    return WorkerSettings()
 
 
-def _ssl_context():
+def _redis() -> redis.Redis:
+    # A plain Redis client on the same broker Celery uses, for the dead-letter shelf. The
+    # URL comes from celery_app, which validated it via BrokerSettings.
+    return redis.from_url(BROKER_URL)
+
+
+def _ssl_context() -> ssl.SSLContext:
     # Verifying TLS for the send: checks the server cert and hostname against the system
     # trust store and refuses anything older than TLS 1.2.
     ctx = ssl.create_default_context()
@@ -66,7 +84,7 @@ def _ssl_context():
     return ctx
 
 
-def build_email(cleaned):
+def build_email(cleaned: dict[str, str]) -> EmailMessage:
     # Defense in depth: the web app already validated this, but the worker trusts whatever
     # is on the queue, so re-reject CR/LF in the fields that land in headers. EmailMessage
     # is a second backstop, but this fails fast and clearly.
@@ -78,26 +96,21 @@ def build_email(cleaned):
     msg["To"] = TO_ADDR
     msg["Reply-To"] = cleaned["email"]
     msg["Subject"] = f"Contact form: {cleaned['name']}"
-    body = (
-        f"Name: {cleaned['name']}\n"
-        f"Email: {cleaned['email']}\n\n"
-        f"Message:\n{cleaned['message']}"
-    )
+    body = f"Name: {cleaned['name']}\nEmail: {cleaned['email']}\n\nMessage:\n{cleaned['message']}"
     msg.set_content(body)
     return msg
 
 
-def send_email(msg):
-    # Credentials read here, at send time, so they live only in the worker's environment.
-    user = os.environ["CONTACT_SMTP_USER"]
-    password = os.environ["CONTACT_SMTP_PASS"]
+def send_email(msg: EmailMessage) -> None:
+    # Credentials come from WorkerSettings, so they live only in the worker's environment.
+    s = _worker_settings()
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
         smtp.starttls(context=_ssl_context())
-        smtp.login(user, password)
+        smtp.login(s.contact_smtp_user, s.contact_smtp_pass)
         smtp.send_message(msg)
 
 
-def is_transient(exc):
+def is_transient(exc: Exception) -> bool:
     """Decide whether a failure is worth a FAST retry, or should go straight to the shelf.
 
     This does NOT decide whether to give up — nothing is ever given up on here, because
@@ -127,17 +140,22 @@ def is_transient(exc):
     return False
 
 
-def _shelve(data, request_id, reason, first_failed_at, redrive_count):
+def _shelve(
+    data: dict,
+    request_id: str | None,
+    reason: str,
+    first_failed_at: float | None,
+    redrive_count: int,
+) -> None:
     """Park a failed send on the Redis shelf for the scheduled sweep to re-drive."""
-    entry = json.dumps(
-        {
-            "data": data,
-            "request_id": request_id,
-            "reason": reason,
-            "first_failed_at": first_failed_at or time.time(),
-            "redrive_count": redrive_count,
-        }
-    )
+    payload: ShelfEntry = {
+        "data": data,
+        "request_id": request_id,
+        "reason": reason,
+        "first_failed_at": first_failed_at or time.time(),
+        "redrive_count": redrive_count,
+    }
+    entry = json.dumps(payload)
     try:
         _redis().rpush(DEADLETTER_KEY, entry)
     except Exception as exc:
@@ -162,8 +180,12 @@ def _shelve(data, request_id, reason, first_failed_at, redrive_count):
     retry_jitter=True,  # randomize each delay so many queued sends don't retry in lockstep
 )
 def send_contact_email(
-    self, data, request_id=None, first_failed_at=None, redrive_count=0
-):
+    self,
+    data: dict,
+    request_id: str | None = None,
+    first_failed_at: float | None = None,
+    redrive_count: int = 0,
+) -> None:
     # Carry the web request's id (and this task's id) onto every log line, so the enqueue
     # in the web logs and the send here can be tied together.
     structlog.contextvars.clear_contextvars()
@@ -185,17 +207,13 @@ def send_contact_email(
     except Exception as exc:
         # Fast layer: a transient failure with attempts left gets a quick retry.
         if is_transient(exc) and self.request.retries < self.max_retries:
-            log.warning(
-                "send_transient_retry", attempt=self.request.retries, error=str(exc)
-            )
+            log.warning("send_transient_retry", attempt=self.request.retries, error=str(exc))
             raise TransientSendError(str(exc)) from exc
         # Otherwise park it on the shelf for the scheduled sweep. Nothing is abandoned
         # here — the sweep keeps re-driving it until it delivers or the age backstop trips.
         reason = "retry_exhausted" if is_transient(exc) else "not_fast_retryable"
         _shelve(data, request_id, reason, first_failed_at, redrive_count)
-        log.warning(
-            "send_shelved", reason=reason, error=str(exc), redrive_count=redrive_count
-        )
+        log.warning("send_shelved", reason=reason, error=str(exc), redrive_count=redrive_count)
         return  # handled: safely shelved, so the task itself succeeds
 
     log.info("message_sent", attempt=self.request.retries, redrive_count=redrive_count)
@@ -206,7 +224,7 @@ REDRIVE_RUNAWAY_WARN = int(os.environ.get("REDRIVE_RUNAWAY_WARN", "100"))
 
 
 @celery.task
-def redrive_dead_letters():
+def redrive_dead_letters() -> None:
     """Scheduled sweep: re-send everything on the shelf. A message that fails again is
     re-shelved with its ORIGINAL first-failed time, so its age clock keeps running. The
     only messages dropped are those past the age backstop, and that drop is loud."""
@@ -224,7 +242,7 @@ def redrive_dead_letters():
             raw = r.lmove(DEADLETTER_KEY, PROCESSING_KEY, "LEFT", "RIGHT")
             if raw is None:
                 break
-            entry = json.loads(raw)
+            entry: ShelfEntry = json.loads(raw)
             age = time.time() - entry["first_failed_at"]
             if age > MAX_SHELF_AGE_SECONDS:
                 log.error(
@@ -244,7 +262,9 @@ def redrive_dead_letters():
                 redriven += 1
             # lrem is given the exact value lmove returned, so the stored representation
             # matches by construction (one client, no bytes/str mismatch to orphan entries).
-            r.lrem(PROCESSING_KEY, 1, raw)
+            # redis-py's stub types the value as str, but it encodes bytes identically at
+            # runtime (verified), so the bytes|str value here is safe.
+            r.lrem(PROCESSING_KEY, 1, raw)  # type: ignore[arg-type]
     except redis.exceptions.RedisError:
         # Redis flaked mid-sweep. Anything moved to processing is recovered on the next
         # sweep, so bail cleanly instead of crashing the scheduled task.
