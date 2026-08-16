@@ -1,0 +1,7 @@
+# keepbreath.ing — contact API dev/test dependencies
+# NOT installed into the runtime image — the container ships only requirements.txt.
+# Install locally to run the test suite:  pip install -r requirements-dev.txt
+-r requirements.txt
+
+pytest==9.1.1
+fakeredis==2.37.0   # in-memory Redis for testing the dead-letter shelf without a real server

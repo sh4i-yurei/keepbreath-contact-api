@@ -2,33 +2,130 @@
 # keepbreath.ing — contact API (docker-compose.yml)
 # Author: Mark Thompson
 # ============================================================
-# Runs the contact-api container and joins the SHARED network the nginx (web)
-# container is also on, so nginx can proxy to it by name. No published ports.
+# Three services make up the contact backend:
+#   contact-api  the Flask web app — validates the form and ENQUEUES the send
+#   worker       the Celery worker — performs the mail send, with retries
+#   redis        the queue that holds pending sends between the two
+#
+# Secrets come from a gitignored .env file (copy .env.example and fill it in). Each
+# service is handed ONLY the variables it needs (least privilege): the web app never
+# receives the SMTP password — only the worker does.
 
-# ------------------------------------------------------------
-# SERVICE
-# ------------------------------------------------------------
 services:
+  # ----------------------------------------------------------
+  # WEB — Flask + gunicorn. Validates, runs the anti-bot checks, enqueues the send.
+  # ----------------------------------------------------------
   contact-api:
-    build: .                         # build from this repo's Dockerfile
+    build: .
     restart: unless-stopped
+    mem_limit: 300m                  # cap memory so a runaway can't starve the host
     security_opt:
-      - "no-new-privileges:true"     # container can't gain more privileges than it starts with
+      - "no-new-privileges:true"     # can't gain more privileges than it starts with
     cap_drop:
       - ALL                          # drop every Linux capability — the app needs none
     init: true                       # tini as PID 1 — signal forwarding + zombie reaping
-    read_only: true                  # immutable root fs; the app only writes the /data volume
+    read_only: true                  # immutable root fs; only the /data volume is writable
     tmpfs:
       - /tmp                         # scratch (read-only root blocks writes everywhere else)
       - /dev/shm                     # gunicorn's --worker-tmp-dir heartbeat file
-    env_file: contact-api.env        # SMTP creds + ALTCHA_HMAC_KEY + REPLAY_DB_PATH (gitignored)
-    extra_hosts:
-      - "mail.keepbreath.ing:host-gateway"   # reach the host's Postfix with a valid cert name
+    environment:
+      CELERY_BROKER_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0"
+      ALTCHA_HMAC_KEY: "${ALTCHA_HMAC_KEY:?set ALTCHA_HMAC_KEY in .env}"
+      REPLAY_DB_PATH: /data/altcha_replay.db
+      # No CONTACT_SMTP_* here on purpose — the web app never sends mail, so it never
+      # holds the mail credentials.
     volumes:
-      - contact-api-data:/data       # SQLite replay DB lives here (REPLAY_DB_PATH) — survives restarts
-    # NO published ports — only nginx reaches it, over the shared network
+      - contact-api-data:/data       # SQLite ALTCHA replay DB — survives restarts
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
-      - keepbreath-net               # the shared external network
+      - keepbreath-net               # shared external net (nginx reaches this by name)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ----------------------------------------------------------
+  # WORKER — Celery. Pulls sends off the queue and delivers them, retrying transient
+  # failures. This is the ONLY service given the SMTP credentials.
+  # ----------------------------------------------------------
+  worker:
+    build: .                         # same image as the web app, different command
+    # -B embeds the Celery Beat scheduler in the worker, which is what runs the dead-letter
+    # re-drive sweep on its interval. Fine for a single worker; if this ever scales to
+    # several workers, only one should run beat. Its schedule file goes on the writable
+    # in-memory /tmp, because the rootfs is read-only.
+    command: ["celery", "-A", "celery_app.celery", "worker", "-B", "--schedule", "/tmp/celerybeat-schedule", "--loglevel=INFO", "--concurrency=2"]
+    restart: unless-stopped
+    mem_limit: 400m
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp                         # HOME=/tmp lives here; Celery/billiard scratch
+      - /dev/shm                     # billiard (Celery's multiprocessing) semaphores
+    environment:
+      CELERY_BROKER_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0"
+      CONTACT_SMTP_USER: "${CONTACT_SMTP_USER:?set CONTACT_SMTP_USER in .env}"
+      CONTACT_SMTP_PASS: "${CONTACT_SMTP_PASS:?set CONTACT_SMTP_PASS in .env}"
+    extra_hosts:
+      - "mail.keepbreath.ing:host-gateway"   # the worker sends — reach the host's Postfix with a valid cert name
+    depends_on:
+      redis:
+        condition: service_healthy
+    # The worker serves no HTTP, so override the image's web health check with a Celery
+    # liveness ping (does a live worker answer on the broker?) instead.
+    healthcheck:
+      test: ["CMD", "celery", "-A", "celery_app.celery", "inspect", "ping", "-t", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - keepbreath-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ----------------------------------------------------------
+  # REDIS — the broker/queue. Internal-only (no published ports), password-protected,
+  # and persistent (append-only file) so queued sends survive a restart.
+  # ----------------------------------------------------------
+  redis:
+    image: docker.io/library/redis:7-alpine@sha256:9702d01c1f10c3ea9f48211b4362e44f154ff02d063e6f7268eba804059f53bf
+    restart: unless-stopped
+    mem_limit: 300m
+    # maxmemory caps the queue; noeviction makes a full broker REJECT new writes (the web
+    # app then returns 503) instead of silently evicting a key — so a queued message is
+    # never dropped to make room.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"]
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD}"   # lets the healthcheck authenticate without the password in argv
+    read_only: true                  # immutable rootfs; only the /data volume is writable
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"     # can't escalate. We deliberately do NOT cap_drop ALL
+                                     # here: the official image starts as root and steps down
+                                     # to the redis user at boot, which needs CHOWN/SETUID/
+                                     # SETGID. Dropping all caps breaks that startup.
+    volumes:
+      - redis-data:/data             # append-only file persists the queue
+    # NO published ports — only the web app and worker reach it, over the shared network
+    networks:
+      - keepbreath-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     logging:
       driver: json-file
       options:
@@ -39,7 +136,8 @@ services:
 # VOLUMES
 # ------------------------------------------------------------
 volumes:
-  contact-api-data:                  # named volume for the replay DB
+  contact-api-data:                  # ALTCHA replay DB
+  redis-data:                        # Redis append-only queue persistence
 
 # ------------------------------------------------------------
 # NETWORKS
@@ -47,4 +145,4 @@ volumes:
 networks:
   keepbreath-net:
     external: true                   # created once on the droplet: docker network create keepbreath-net
-    # (the site's web compose also joins this network)
+    # (the site's web/nginx compose also joins this network)
