@@ -55,7 +55,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # APP SOURCE
 # Copy only what the app needs (the .dockerignore keeps the rest out).
 # ------------------------------------------------------------
-COPY app.py replay.py ./
+COPY app.py replay.py celery_app.py tasks.py logging_config.py ./
 
 
 # ------------------------------------------------------------
@@ -78,7 +78,8 @@ USER appuser
 #   --worker-tmp-dir /dev/shm : keep gunicorn's heartbeat file on tmpfs (a
 #     disk-backed /tmp can stall a worker) — also required for a read-only rootfs.
 #   --access-logfile -        : access logs to stdout, alongside the structlog JSON.
-# Tune workers/timeout for the blocking SMTP send (review note).
+# The mail send now runs in the Celery worker (a separate service), so these web
+# workers no longer block on SMTP. Worker and timeout sizing is documented in the README.
 # ------------------------------------------------------------
 EXPOSE 8000
 

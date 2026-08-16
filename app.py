@@ -2,23 +2,22 @@
 # keepbreath.ing — contact API (app.py)
 # Author: Mark Thompson
 # ============================================================
-# Flask endpoint that turns a contact-form POST into an email.
+# Flask endpoint that validates a contact-form POST and hands it to the background
+# worker (tasks.py) to email. Validation and anti-bot checks happen here; the send does not.
 
 
 # ------------------------------------------------------------
 # IMPORTS & APP SETUP
-# Flask, plus the standard-library mail tools.
+# Flask and the request-handling pieces. The mail send lives in the Celery worker
+# (tasks.py), so no SMTP libraries are imported here.
 # ------------------------------------------------------------
 import base64
 import binascii
 import json
 import os
-import smtplib
-import ssl
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 
 import structlog
 from flask import Flask, request, jsonify, g
@@ -27,6 +26,8 @@ from email_validator import validate_email, EmailNotValidError
 from altcha import create_challenge, verify_solution
 
 import replay
+from logging_config import configure_logging
+from tasks import send_contact_email
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = (
@@ -36,22 +37,9 @@ app.config["MAX_CONTENT_LENGTH"] = (
 
 # ------------------------------------------------------------
 # CONFIG
-# Connection details, credentials from the environment, size limits.
+# Size limits and the ALTCHA key. The mail/SMTP config lives in tasks.py now, since
+# the worker — not this web app — does the sending.
 # ------------------------------------------------------------
-SMTP_HOST = "mail.keepbreath.ing"
-SMTP_PORT = 587
-SMTP_USER = os.environ["CONTACT_SMTP_USER"]
-SMTP_PASS = os.environ["CONTACT_SMTP_PASS"]
-
-# verifying TLS context for the SMTP send — checks the server cert + hostname,
-# using the system CA trust store, and refuses anything older than TLS 1.2
-SSL_CONTEXT = ssl.create_default_context()
-SSL_CONTEXT.minimum_version = ssl.TLSVersion.TLSv1_2
-
-TO_ADDR = "contact@keepbreath.ing"
-FROM_ADDR = "contact@keepbreath.ing"
-
-
 MAX_NAME = 75
 MAX_EMAIL = 254
 MAX_MESSAGE = 1000
@@ -65,19 +53,10 @@ ALTCHA_COST = 5000  # placeholder — measure + tune on the real round-trip
 
 # ------------------------------------------------------------
 # LOGGING
-# Structured JSON to stdout; metadata only — never message content or secrets.
+# Structured JSON to stdout (shared config in logging_config.py so the web app and the
+# worker log identically); metadata only — never message content or secrets.
 # ------------------------------------------------------------
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.format_exc_info,
-        structlog.processors.JSONRenderer(),
-    ],
-    logger_factory=structlog.PrintLoggerFactory(),
-)
-log = structlog.get_logger()
+log = configure_logging()
 
 # create the replay-registry table on startup (idempotent)
 replay.init_db()
@@ -87,7 +66,9 @@ replay.init_db()
 def bind_request_id():
     # fresh request-id per request so every log line in it can be correlated
     structlog.contextvars.clear_contextvars()
-    structlog.contextvars.bind_contextvars(request_id=str(uuid.uuid4()))
+    request_id = str(uuid.uuid4())
+    structlog.contextvars.bind_contextvars(request_id=request_id)
+    g.request_id = request_id  # stash it so the enqueue can pass it to the worker
     # start the request timer. perf_counter is a monotonic clock (only ever moves
     # forward, immune to system-clock changes), which is what you want for measuring
     # an elapsed interval. after_request reads this back to log the duration.
@@ -182,34 +163,6 @@ def validate_contact_form(data):
 
 
 # ------------------------------------------------------------
-# BUILD & SEND
-# Build the email safely and send it over authenticated submission.
-# ------------------------------------------------------------
-
-
-def build_email(cleaned):
-    msg = EmailMessage()
-    msg["From"] = FROM_ADDR
-    msg["To"] = TO_ADDR
-    msg["Reply-To"] = cleaned["email"]
-    msg["Subject"] = f"Contact form: {cleaned['name']}"
-    body = (
-        f"Name: {cleaned['name']}\n"
-        f"Email: {cleaned['email']}\n\n"
-        f"Message:\n{cleaned['message']}"
-    )
-    msg.set_content(body)
-    return msg
-
-
-def send_email(msg):
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
-        smtp.starttls(context=SSL_CONTEXT)
-        smtp.login(SMTP_USER, SMTP_PASS)
-        smtp.send_message(msg)
-
-
-# ------------------------------------------------------------
 # ALTCHA — proof-of-work challenge (bot defense)
 # The widget fetches a signed challenge here, solves it in the browser, and sends
 # the solution back with the form for the route's verify_solution() to check.
@@ -229,7 +182,7 @@ def altcha_challenge():
 
 # ------------------------------------------------------------
 # ROUTE — POST /api/contact
-# Validate, send, and return a small JSON status.
+# Validate, enqueue the send, and return a small JSON status.
 # ------------------------------------------------------------
 
 
@@ -241,16 +194,16 @@ def contact():
     if not isinstance(data, dict):
         return jsonify({"ok": False, "error": "invalid request"}), 400
 
-    # honeypot: a hidden field humans never fill; if it has anything in it, treat
-    # it as a bot — return a success-looking response and silently drop (no signal)
+    # honeypot: a hidden field humans never fill; if it has anything in it, treat it as a
+    # bot. Return the SAME response a real accept gives (202, ok:true) so a probing bot
+    # can't tell the honeypot apart, and silently drop it (no enqueue).
     if data.get("website"):
         log.info("honeypot_triggered")
-        return jsonify({"ok": True}), 200
+        return jsonify({"ok": True}), 202
 
-    # ALTCHA proof-of-work: the widget's solved token must verify against our HMAC
-    # key (signature + solution + not expired). Rejects bots that skip the work.
-    # NOTE: untested until the widget round-trip; replay guard = short expiry for
-    # now (a shared used-token store is the follow-up).
+    # ALTCHA proof-of-work: the widget's solved token must verify against our HMAC key
+    # (signature + solution + not expired). Rejects bots that skip the work. The single-use
+    # replay guard below is backed by the SQLite registry in replay.py.
     altcha_token = data.get("altcha")
     if not altcha_token or not verify_solution(altcha_token, ALTCHA_HMAC_KEY).verified:
         log.info("altcha_failed")
@@ -275,23 +228,18 @@ def contact():
     if err:
         log.info("validation_failed", reason=err)
         return jsonify({"ok": False, "error": err}), 400
-    msg = build_email(cleaned)
-    # time the send itself, on both paths: a slow *failure* (the mail server
-    # hanging until the timeout) is exactly the signal worth seeing in the logs.
-    send_start = time.perf_counter()
+
+    # Hand the send to the background worker and return immediately — the request no
+    # longer waits on the mail server. The worker performs the send with retries. If the
+    # queue itself is unreachable (Redis down), fail cleanly with a 503 rather than a 500.
     try:
-        send_email(msg)
+        send_contact_email.delay(cleaned, request_id=g.request_id)
     except Exception:
-        log.exception(
-            "send_failed",
-            send_duration_seconds=round(time.perf_counter() - send_start, 3),
-        )
-        return jsonify({"ok": False, "error": "failed to send"}), 502
-    log.info(
-        "message_sent",
-        send_duration_seconds=round(time.perf_counter() - send_start, 3),
-    )
-    return jsonify({"ok": True}), 200
+        log.exception("enqueue_failed")
+        return jsonify({"ok": False, "error": "temporarily unavailable"}), 503
+    log.info("message_enqueued")
+    # 202 Accepted: the request is validated and queued, not yet delivered.
+    return jsonify({"ok": True}), 202
 
 
 # ------------------------------------------------------------

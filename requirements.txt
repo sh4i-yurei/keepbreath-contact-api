@@ -12,3 +12,9 @@ structlog==26.1.0
 # check_expires, and the nested {challenge, solution} payload. 2.1.0 is well above
 # 1.0.0, which fixed CVE-2025-68113 (challenge splicing / replay).
 altcha==2.1.0
+
+# Celery + Redis: the background task system that runs the mail send off the request
+# path. celery is the task queue; redis is the Python client for the Redis broker that
+# holds the pending sends. Pinned exact (resolved 2026-08-15).
+celery==5.6.3
+redis==8.1.0

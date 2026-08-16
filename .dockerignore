@@ -30,3 +30,7 @@ README.md
 deploy/
 Dockerfile
 docker-compose.yml
+.env.example
+requirements-dev.txt
+tests/
+.pytest_cache/
