@@ -24,6 +24,8 @@ from flask import Flask, request, jsonify, g
 from werkzeug.exceptions import HTTPException
 from email_validator import validate_email, EmailNotValidError
 from altcha import create_challenge, verify_solution
+from kombu.exceptions import OperationalError as KombuOperationalError
+from redis.exceptions import RedisError
 
 import replay
 from logging_config import configure_logging
@@ -229,13 +231,14 @@ def contact():
         log.info("validation_failed", reason=err)
         return jsonify({"ok": False, "error": err}), 400
 
-    # Hand the send to the background worker and return immediately — the request no
-    # longer waits on the mail server. The worker performs the send with retries. If the
-    # queue itself is unreachable (Redis down), fail cleanly with a 503 rather than a 500.
+    # Hand the send to the background worker and return immediately — the request no longer
+    # waits on the mail server. Only a broker/queue fault (Redis down) is a real "try again
+    # later" here; catch exactly those and return 503. Anything else is an unexpected bug, so
+    # let it bubble to the 500 handler rather than hiding it behind a 503.
     try:
         send_contact_email.delay(cleaned, request_id=g.request_id)
-    except Exception:
-        log.exception("enqueue_failed")
+    except (KombuOperationalError, RedisError):
+        log.exception("enqueue_broker_unavailable")
         return jsonify({"ok": False, "error": "temporarily unavailable"}), 503
     log.info("message_enqueued")
     # 202 Accepted: the request is validated and queued, not yet delivered.

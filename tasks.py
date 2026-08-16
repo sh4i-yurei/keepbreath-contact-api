@@ -140,9 +140,16 @@ def _shelve(data, request_id, reason, first_failed_at, redrive_count):
     )
     try:
         _redis().rpush(DEADLETTER_KEY, entry)
-    except Exception:
-        # If we can't even shelve it, this is the one place a message can be lost — shout.
-        log.critical("dead_letter_shelve_failed", request_id=request_id, reason=reason)
+    except Exception as exc:
+        # If we can't even shelve it, this is the one place a message can be lost — shout,
+        # with enough context to find it, and re-raise so the failure isn't swallowed.
+        log.critical(
+            "dead_letter_shelve_failed",
+            request_id=request_id,
+            reason=reason,
+            redrive_count=redrive_count,
+            error=str(exc),
+        )
         raise
 
 
@@ -194,42 +201,56 @@ def send_contact_email(
     log.info("message_sent", attempt=self.request.retries, redrive_count=redrive_count)
 
 
+# If one sweep re-drives more than this, something is wrong (a runaway loop) — warn.
+REDRIVE_RUNAWAY_WARN = int(os.environ.get("REDRIVE_RUNAWAY_WARN", "100"))
+
+
 @celery.task
 def redrive_dead_letters():
     """Scheduled sweep: re-send everything on the shelf. A message that fails again is
     re-shelved with its ORIGINAL first-failed time, so its age clock keeps running. The
     only messages dropped are those past the age backstop, and that drop is loud."""
     r = _redis()
-    # Recover anything a previous crashed sweep left mid-flight in the processing list.
-    while r.lmove(PROCESSING_KEY, DEADLETTER_KEY, "LEFT", "RIGHT"):
-        pass
     redriven = 0
     expired = 0
-    while True:
-        # Atomically move an entry to the processing list before acting on it. If we crash
-        # now, it's parked there and the next sweep's recovery step moves it back — so a
-        # message is never lost, at worst re-driven twice.
-        raw = r.lmove(DEADLETTER_KEY, PROCESSING_KEY, "LEFT", "RIGHT")
-        if raw is None:
-            break
-        entry = json.loads(raw)
-        age = time.time() - entry["first_failed_at"]
-        if age > MAX_SHELF_AGE_SECONDS:
-            log.error(
-                "dead_letter_expired",
-                request_id=entry.get("request_id"),
-                age_days=round(age / 86400, 1),
-                redrive_count=entry.get("redrive_count", 0),
-            )
-            expired += 1
-        else:
-            send_contact_email.delay(
-                entry["data"],
-                request_id=entry.get("request_id"),
-                first_failed_at=entry["first_failed_at"],
-                redrive_count=entry.get("redrive_count", 0) + 1,
-            )
-            redriven += 1
-        r.lrem(PROCESSING_KEY, 1, raw)  # done with this entry — drop it from processing
+    try:
+        # Recover anything a previous crashed sweep left mid-flight in the processing list.
+        while r.lmove(PROCESSING_KEY, DEADLETTER_KEY, "LEFT", "RIGHT"):
+            pass
+        while True:
+            # Atomically move an entry to the processing list before acting on it. If we
+            # crash now, it's parked there and the next sweep's recovery step moves it back,
+            # so a message is never lost, at worst re-driven twice.
+            raw = r.lmove(DEADLETTER_KEY, PROCESSING_KEY, "LEFT", "RIGHT")
+            if raw is None:
+                break
+            entry = json.loads(raw)
+            age = time.time() - entry["first_failed_at"]
+            if age > MAX_SHELF_AGE_SECONDS:
+                log.error(
+                    "dead_letter_expired",
+                    request_id=entry.get("request_id"),
+                    age_days=round(age / 86400, 1),
+                    redrive_count=entry.get("redrive_count", 0),
+                )
+                expired += 1
+            else:
+                send_contact_email.delay(
+                    entry["data"],
+                    request_id=entry.get("request_id"),
+                    first_failed_at=entry["first_failed_at"],
+                    redrive_count=entry.get("redrive_count", 0) + 1,
+                )
+                redriven += 1
+            # lrem is given the exact value lmove returned, so the stored representation
+            # matches by construction (one client, no bytes/str mismatch to orphan entries).
+            r.lrem(PROCESSING_KEY, 1, raw)
+    except redis.exceptions.RedisError:
+        # Redis flaked mid-sweep. Anything moved to processing is recovered on the next
+        # sweep, so bail cleanly instead of crashing the scheduled task.
+        log.exception("redrive_redis_error")
+        return
+    if redriven > REDRIVE_RUNAWAY_WARN:
+        log.warning("redrive_runaway", redriven=redriven)
     if redriven or expired:
         log.info("redrive_swept", redriven=redriven, expired=expired)

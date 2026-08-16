@@ -115,6 +115,19 @@ that proxy rule lives in the site repo's `nginx.conf` (single source of truth), 
 - **Worker (Celery):** `--concurrency` sets how many sends run at once. For this low volume, 2
   is plenty; raise it only if the queue backs up.
 
+## Operations
+
+- **Run exactly one scheduler.** The re-drive sweep runs via Celery Beat, embedded in the worker
+  with `-B`. That's fine for a single worker, but if this ever scales to several workers, only
+  **one** may run Beat — several `-B` workers would each fire the sweep and re-drive duplicates.
+  At that point, move Beat to a dedicated `celery beat` service instead.
+- **What to watch** in the logs (and, once the observability project lands, alert on):
+  - `dead_letter_expired` — a message was finally dropped after 3 days on the shelf. Should be
+    rare; if it fires, something was broken for days.
+  - `redrive_runaway` — a single sweep re-drove an unusually large batch, a sign of a backlog.
+  - `dead_letter_shelve_failed` — the one place a message can be lost (Redis rejected the write).
+  - The Redis queue and dead-letter shelf depth.
+
 ## Tests
 
 Unit tests cover the retry/dead-letter classification and the task's success and failure paths.
