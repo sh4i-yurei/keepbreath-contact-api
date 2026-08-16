@@ -5,7 +5,7 @@
 # gate system into one workflow for this repo:
 #   code-quality  Ruff (lint + format) and mypy (types)
 #   tests         pytest
-#   security      CodeQL static analysis (warning-only for now)
+#   security      CodeQL static analysis and dependency review (warning-only for now)
 #   integration   bring the whole stack up with compose and send one message end to end
 name: CI
 
@@ -71,6 +71,16 @@ jobs:
       - name: Run CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
+  # Warning-only dependency review (pull requests only — it diffs the PR's dependencies).
+  # Requires the repo's Dependency Graph feature to be enabled.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+
   # ----------------------------------------------------------
   # Gate: integration — the unit tests can't catch compose/env mistakes, so bring the
   # real stack up and push one message all the way through. Mail can't be delivered in
@@ -111,8 +121,7 @@ jobs:
             docker compose exec -T contact-api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" 2>/dev/null && break
             sleep 2
           done
-          docker compose cp smoke.py contact-api:/tmp/smoke.py
-          docker compose exec -T contact-api python /tmp/smoke.py
+          docker compose exec -T contact-api python - < smoke.py
           for i in $(seq 1 30); do
             n=$(docker compose exec -T redis redis-cli -a ci-test-password LLEN contact:deadletters 2>/dev/null | tr -d '[:space:]')
             if [ "$n" = "1" ]; then echo "message processed onto the shelf — pipeline works"; exit 0; fi
