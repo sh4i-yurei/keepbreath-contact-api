@@ -210,7 +210,9 @@ def contact():
 
 # ------------------------------------------------------------
 # DEV ENTRY POINT
-# Local dev only (python app.py); gunicorn runs it in production.
+# Local dev only (python app.py); gunicorn runs it in production, so this block never
+# executes there. debug is deliberately left off — Flask's debugger exposes an interactive
+# console that runs arbitrary code, which must never be reachable, even by accident.
 # ------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="127.0.0.1", port=5000)
