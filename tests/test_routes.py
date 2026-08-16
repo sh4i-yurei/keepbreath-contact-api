@@ -1,6 +1,8 @@
 # Tests for the HTTP routes, driven through Flask's test client.
+from datetime import datetime, timedelta, timezone
+
 import app as app_module
-from altcha import Challenge, Payload, solve_challenge
+from altcha import Challenge, Payload, create_challenge, solve_challenge
 
 VALID = {"name": "Ada Lovelace", "email": "ada@example.com", "message": "hello there"}
 
@@ -42,6 +44,22 @@ def test_replayed_token_is_rejected(client, fresh_replay, monkeypatch):
     second = client.post("/api/contact", json={**VALID, "altcha": token})
     assert first.status_code == 202
     assert second.status_code == 400
+
+
+def test_expired_token_is_rejected(client):
+    expired_challenge = create_challenge(
+        algorithm="PBKDF2/SHA-256",
+        cost=app_module.ALTCHA_COST,
+        hmac_secret=app_module.ALTCHA_HMAC_KEY,
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    solution = solve_challenge(expired_challenge)
+    assert solution is not None
+    token = Payload(expired_challenge, solution).to_base64()
+
+    resp = client.post("/api/contact", json={**VALID, "altcha": token})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "verification failed"
 
 
 def test_malformed_token_is_rejected(client):
