@@ -21,7 +21,6 @@ from datetime import datetime, timedelta, timezone
 import structlog
 from flask import Flask, request, jsonify, g
 from werkzeug.exceptions import HTTPException
-from email_validator import validate_email, EmailNotValidError
 from altcha import create_challenge, verify_solution
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
@@ -30,6 +29,7 @@ import replay
 from config import WebSettings
 from logging_config import configure_logging
 from tasks import send_contact_email
+from validation import validate_contact_form
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024  # cap request bodies at 16 KB → 413 if larger
@@ -37,13 +37,10 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024  # cap request bodies at 16 KB → 
 
 # ------------------------------------------------------------
 # CONFIG
-# Size limits and the ALTCHA key. The mail/SMTP config lives in tasks.py now, since
-# the worker — not this web app — does the sending.
+# The ALTCHA key and its cost. The field size limits live in validation.py alongside the
+# checks that use them, and the mail/SMTP config lives in tasks.py, since the worker —
+# not this web app — does the sending.
 # ------------------------------------------------------------
-MAX_NAME = 75
-MAX_EMAIL = 254
-MAX_MESSAGE = 1000
-
 # ALTCHA proof-of-work bot defense. The HMAC key signs challenges so they can't be
 # forged. cost = the PoW difficulty — TUNE this against the live widget (too low =
 # weak, too high = the visitor waits too long). 5000 is the library's example value.
@@ -130,42 +127,6 @@ def handle_unexpected_error(e):
 @app.route("/health")
 def health():
     return jsonify({"ok": True}), 200
-
-
-# ------------------------------------------------------------
-# VALIDATION
-# Server-side checks on the submitted data (never trust the client).
-# ------------------------------------------------------------
-def validate_contact_form(data: dict) -> tuple[dict[str, str] | None, str | None]:
-    cleaned = {}
-    for field in ["name", "email", "message"]:
-        value = data.get(field)
-        if not isinstance(value, str):
-            return None, f"Invalid {field}."
-        cleaned[field] = value
-    # strip whitespace
-    cleaned = {k: v.strip() for k, v in cleaned.items()}
-
-    # basic length checks
-    if not cleaned["name"] or len(cleaned["name"]) > MAX_NAME:
-        return None, "Invalid name"
-    if not cleaned["email"] or len(cleaned["email"]) > MAX_EMAIL:
-        return None, "Invalid email"
-    if not cleaned["message"] or len(cleaned["message"]) > MAX_MESSAGE:
-        return None, "Invalid message"
-
-    # reject CR/LF in name — it lands in the Subject header (injection guard)
-    if "\r" in cleaned["name"] or "\n" in cleaned["name"]:
-        return None, "Invalid name"
-
-    # email format + safety via the email-validator library
-    try:
-        result = validate_email(cleaned["email"], check_deliverability=False)
-        cleaned["email"] = result.normalized
-    except EmailNotValidError:
-        return None, "Invalid email"
-
-    return cleaned, None
 
 
 # ------------------------------------------------------------
