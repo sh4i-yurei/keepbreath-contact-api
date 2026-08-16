@@ -44,3 +44,13 @@ def test_validation_error_hides_submitted_secret_values(monkeypatch):
     with pytest.raises(ValidationError) as exc:
         WorkerSettings()
     assert "SUPERSECRET_VALUE" not in str(exc.value)
+
+
+def test_broker_password_not_leaked_in_an_unrelated_config_error(monkeypatch):
+    # The broker URL carries the Redis password. Even when it's present in the environment
+    # as an ignored extra, it must not surface in a validation error for a different field.
+    monkeypatch.setenv("CELERY_BROKER_URL", "redis://:BROKER_SECRET_PW@redis:6379/0")
+    monkeypatch.delenv("ALTCHA_HMAC_KEY", raising=False)
+    with pytest.raises(ValidationError) as exc:
+        WebSettings()
+    assert "BROKER_SECRET_PW" not in str(exc.value)
