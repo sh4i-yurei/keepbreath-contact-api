@@ -120,3 +120,20 @@ def test_redrive_expires_and_drops_an_old_message(monkeypatch, fake_redis):
     redrive_dead_letters.apply()
     assert len(sent) == 0  # NOT re-sent — it's too old
     assert fake_redis.llen(DEADLETTER_KEY) == 0  # dropped off the shelf
+
+
+def test_redrive_recovers_an_orphan_from_a_crashed_sweep(monkeypatch, fake_redis):
+    # Simulate a sweep that crashed after moving an entry to the processing list but before
+    # removing it — the entry is a stuck "orphan". The next sweep must recover it, not lose it.
+    tasks._shelve(VALID, "orphan", "retry_exhausted", time.time(), 0)
+    fake_redis.lmove(tasks.DEADLETTER_KEY, tasks.PROCESSING_KEY, "LEFT", "RIGHT")
+    assert fake_redis.llen(tasks.PROCESSING_KEY) == 1  # stuck orphan
+    assert fake_redis.llen(tasks.DEADLETTER_KEY) == 0
+
+    sent = []
+    monkeypatch.setattr(tasks, "send_email", lambda msg: sent.append(msg))
+    redrive_dead_letters.apply()
+
+    assert len(sent) == 1  # recovered and re-sent, not lost
+    assert fake_redis.llen(tasks.PROCESSING_KEY) == 0  # nothing left stuck
+    assert fake_redis.llen(tasks.DEADLETTER_KEY) == 0  # delivered, off the shelf

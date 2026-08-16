@@ -54,6 +54,10 @@ settings = WebSettings()
 ALTCHA_HMAC_KEY = settings.altcha_hmac_key
 ALTCHA_COST = 5000  # placeholder — measure + tune on the real round-trip
 
+# Point the replay registry at the configured path, so its location has one source of
+# truth (WebSettings) rather than a separate environment read.
+replay.DB_PATH = settings.replay_db_path
+
 
 # ------------------------------------------------------------
 # LOGGING

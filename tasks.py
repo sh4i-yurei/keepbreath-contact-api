@@ -17,11 +17,14 @@ import smtplib
 import ssl
 import time
 from email.message import EmailMessage
+from functools import lru_cache
+from typing import TypedDict
 
 import redis
 import structlog
 
-from celery_app import celery
+from celery_app import BROKER_URL, celery
+from config import WorkerSettings
 from logging_config import configure_logging
 
 log = configure_logging()
@@ -45,13 +48,32 @@ PROCESSING_KEY = "contact:deadletters:processing"
 MAX_SHELF_AGE_SECONDS = int(os.environ.get("DEADLETTER_MAX_AGE_SECONDS", str(3 * 86400)))
 
 
+class ShelfEntry(TypedDict):
+    """The JSON shape of a dead-letter shelf entry, so the shelver and the sweep share one
+    explicit contract."""
+
+    data: dict
+    request_id: str | None
+    reason: str
+    first_failed_at: float
+    redrive_count: int
+
+
 class TransientSendError(Exception):
     """A failure worth burning a FAST retry on: a network blip, dropped connection, 4xx."""
 
 
+@lru_cache(maxsize=1)
+def _worker_settings() -> WorkerSettings:
+    # Built lazily and cached, so the web app (which imports this module only to enqueue)
+    # never constructs it, and the worker reads its mail credentials once.
+    return WorkerSettings()
+
+
 def _redis() -> redis.Redis:
-    # A plain Redis client on the same broker Celery uses, for the dead-letter shelf.
-    return redis.from_url(os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0"))
+    # A plain Redis client on the same broker Celery uses, for the dead-letter shelf. The
+    # URL comes from celery_app, which validated it via BrokerSettings.
+    return redis.from_url(BROKER_URL)
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -80,12 +102,11 @@ def build_email(cleaned: dict[str, str]) -> EmailMessage:
 
 
 def send_email(msg: EmailMessage) -> None:
-    # Credentials read here, at send time, so they live only in the worker's environment.
-    user = os.environ["CONTACT_SMTP_USER"]
-    password = os.environ["CONTACT_SMTP_PASS"]
+    # Credentials come from WorkerSettings, so they live only in the worker's environment.
+    s = _worker_settings()
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
         smtp.starttls(context=_ssl_context())
-        smtp.login(user, password)
+        smtp.login(s.contact_smtp_user, s.contact_smtp_pass)
         smtp.send_message(msg)
 
 
@@ -127,15 +148,14 @@ def _shelve(
     redrive_count: int,
 ) -> None:
     """Park a failed send on the Redis shelf for the scheduled sweep to re-drive."""
-    entry = json.dumps(
-        {
-            "data": data,
-            "request_id": request_id,
-            "reason": reason,
-            "first_failed_at": first_failed_at or time.time(),
-            "redrive_count": redrive_count,
-        }
-    )
+    payload: ShelfEntry = {
+        "data": data,
+        "request_id": request_id,
+        "reason": reason,
+        "first_failed_at": first_failed_at or time.time(),
+        "redrive_count": redrive_count,
+    }
+    entry = json.dumps(payload)
     try:
         _redis().rpush(DEADLETTER_KEY, entry)
     except Exception as exc:
@@ -222,7 +242,7 @@ def redrive_dead_letters() -> None:
             raw = r.lmove(DEADLETTER_KEY, PROCESSING_KEY, "LEFT", "RIGHT")
             if raw is None:
                 break
-            entry = json.loads(raw)
+            entry: ShelfEntry = json.loads(raw)
             age = time.time() - entry["first_failed_at"]
             if age > MAX_SHELF_AGE_SECONDS:
                 log.error(
