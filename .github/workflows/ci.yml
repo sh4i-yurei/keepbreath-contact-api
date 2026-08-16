@@ -88,6 +88,9 @@ jobs:
   # (broker URL, Redis auth, the worker importing the task, the read-only containers).
   # ----------------------------------------------------------
   integration:
+    # Only run the heavy compose stack once the fast gates pass, to save CI minutes and
+    # keep the failure signal clear.
+    needs: [code-quality, tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -130,4 +133,5 @@ jobs:
           echo "message was never processed"; docker compose logs; exit 1
       - name: Tear down
         if: always()
-        run: docker compose down -v
+        # || true so a failed 'up' (nothing to tear down) can't fail this always() step.
+        run: docker compose down -v || true
