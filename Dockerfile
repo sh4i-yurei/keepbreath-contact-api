@@ -55,7 +55,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # APP SOURCE
 # Copy only what the app needs (the .dockerignore keeps the rest out).
 # ------------------------------------------------------------
-COPY app.py replay.py celery_app.py tasks.py logging_config.py ./
+COPY app.py replay.py celery_app.py tasks.py logging_config.py config.py worker.py ./
 
 
 # ------------------------------------------------------------

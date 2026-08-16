@@ -16,14 +16,14 @@ import time
 DB_PATH = os.environ.get("REPLAY_DB_PATH", "altcha_replay.db")
 
 
-def _connect():
+def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")  # readers don't block the writer
     conn.execute("PRAGMA busy_timeout=5000")  # wait out brief locks instead of erroring
     return conn
 
 
-def init_db():
+def init_db() -> None:
     conn = _connect()
     try:
         with conn:
@@ -36,7 +36,7 @@ def init_db():
         conn.close()
 
 
-def try_reserve(signature, expires_at):
+def try_reserve(signature: str, expires_at: int) -> bool:
     """Record a challenge signature as used.
 
     Returns True if it was fresh (first time seen) or False if it was already

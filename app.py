@@ -14,7 +14,6 @@
 import base64
 import binascii
 import json
-import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -28,13 +27,12 @@ from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 
 import replay
+from config import WebSettings
 from logging_config import configure_logging
 from tasks import send_contact_email
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = (
-    16 * 1024
-)  # cap request bodies at 16 KB → 413 if larger
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024  # cap request bodies at 16 KB → 413 if larger
 
 
 # ------------------------------------------------------------
@@ -49,7 +47,11 @@ MAX_MESSAGE = 1000
 # ALTCHA proof-of-work bot defense. The HMAC key signs challenges so they can't be
 # forged. cost = the PoW difficulty — TUNE this against the live widget (too low =
 # weak, too high = the visitor waits too long). 5000 is the library's example value.
-ALTCHA_HMAC_KEY = os.environ["ALTCHA_HMAC_KEY"]
+# WebSettings() validates the whole web config (the ALTCHA key, the broker URL, and the
+# replay DB path) right here at startup, raising a clear error if any required variable is
+# missing — rather than a confusing failure later.
+settings = WebSettings()
+ALTCHA_HMAC_KEY = settings.altcha_hmac_key
 ALTCHA_COST = 5000  # placeholder — measure + tune on the real round-trip
 
 
@@ -93,9 +95,7 @@ def log_request_completed(response):
             method=request.method,
             path=request.path,
             status=response.status_code,
-            duration_seconds=(
-                round(time.perf_counter() - start, 3) if start is not None else None
-            ),
+            duration_seconds=(round(time.perf_counter() - start, 3) if start is not None else None),
         )
     return response
 
@@ -132,7 +132,7 @@ def health():
 # VALIDATION
 # Server-side checks on the submitted data (never trust the client).
 # ------------------------------------------------------------
-def validate_contact_form(data):
+def validate_contact_form(data: dict) -> tuple[dict[str, str] | None, str | None]:
     cleaned = {}
     for field in ["name", "email", "message"]:
         value = data.get(field)
@@ -219,9 +219,7 @@ def contact():
     except (binascii.Error, ValueError, KeyError, TypeError):
         log.info("altcha_malformed")
         return jsonify({"ok": False, "error": "verification failed"}), 400
-    reserve_until = int(
-        (datetime.now(timezone.utc) + timedelta(minutes=25)).timestamp()
-    )
+    reserve_until = int((datetime.now(timezone.utc) + timedelta(minutes=25)).timestamp())
     if not replay.try_reserve(signature, reserve_until):
         log.info("altcha_replay")
         return jsonify({"ok": False, "error": "verification failed"}), 400

@@ -12,8 +12,9 @@ from celery import Celery
 
 # The "broker" is the queue that holds pending tasks between the web app (which puts
 # tasks in) and the worker (which takes them out). We use Redis for it. The URL comes
-# from the environment so the password is never hard-coded; it falls back to a local
-# Redis so tests and local dev work without any configuration.
+# from the environment so the password is never hard-coded. The localhost fallback is
+# only for local dev and tests; in production the config validation (WebSettings and
+# WorkerSettings) requires CELERY_BROKER_URL, so a real deployment never silently uses it.
 BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
 # How often the scheduled sweep re-drives the dead-letter shelf, in seconds. Hourly by

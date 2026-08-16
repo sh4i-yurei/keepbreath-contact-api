@@ -1,0 +1,18 @@
+# Tooling config for the code-quality gate: ruff (lint + format) and mypy (types).
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# pyflakes (F) catches unused imports and names; pycodestyle (E/W) catches style errors.
+# E501 (line too long) is left to the formatter for code; comments may run slightly longer.
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.13"
+# Flask, Celery, altcha, structlog and friends don't ship type stubs; don't fail on that.
+ignore_missing_imports = true
+# The pydantic plugin teaches mypy that a Settings() reads its fields from the environment,
+# so an empty constructor call is valid rather than "missing required argument".
+plugins = ["pydantic.mypy"]

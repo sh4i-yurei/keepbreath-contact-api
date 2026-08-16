@@ -57,7 +57,7 @@ services:
     # re-drive sweep on its interval. Fine for a single worker; if this ever scales to
     # several workers, only one should run beat. Its schedule file goes on the writable
     # in-memory /tmp, because the rootfs is read-only.
-    command: ["celery", "-A", "celery_app.celery", "worker", "-B", "--schedule", "/tmp/celerybeat-schedule", "--loglevel=INFO", "--concurrency=2"]
+    command: ["celery", "-A", "worker.celery", "worker", "-B", "--schedule", "/tmp/celerybeat-schedule", "--loglevel=INFO", "--concurrency=2"]
     restart: unless-stopped
     mem_limit: 400m
     security_opt:
