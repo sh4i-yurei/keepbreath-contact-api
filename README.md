@@ -107,6 +107,62 @@ docker compose up -d --build
 nginx proxies `/api/` to the web service at `http://contact-api:8000` over the shared network;
 that proxy rule lives in the site repo's `nginx.conf` (single source of truth), not here.
 
+## Reverse proxy — what this API expects in front of it
+
+This service publishes no host ports, so it is always reached through the site's nginx
+reverse proxy. Two things it relies on that proxy to do — rate limiting and the 16 KB body
+cap — happen in nginx, not in the app, so the shape of that proxy config is part of how the
+API behaves. The snippet below mirrors what is actually deployed; the **authoritative copy
+lives in the site repo's `nginx.conf`**, and this is reproduced here so the API is
+understandable on its own, not as a second source to edit.
+
+```nginx
+# http {} context — one shared limit zone, keyed on the real visitor.
+# Cloudflare fronts every request, so the direct peer is always a Cloudflare edge IP.
+# Key on the CF-Connecting-IP header (the real visitor), falling back to the direct
+# address if it is ever absent, so each client still gets its own bucket.
+map $http_cf_connecting_ip $contact_client {
+    ""      $remote_addr;
+    default $http_cf_connecting_ip;
+}
+limit_req_zone $contact_client zone=contact:10m rate=5r/m;
+limit_req_status 429;                  # reject over-limit with 429, not nginx's default 503
+
+# server {} context — the rate-limited proxy for /api/.
+location /api/ {
+    limit_req zone=contact burst=3 nodelay;
+    client_max_body_size 16k;          # match the app's 16 KB body cap
+
+    resolver 127.0.0.11 valid=30s;     # Docker's embedded DNS, resolved per request
+    set $contact_api http://contact-api:8000;
+    proxy_pass $contact_api$request_uri;
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $http_cf_connecting_ip;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Expected proxy behavior:
+
+- **Rate limit.** Each visitor may make five requests per minute, with a short burst of three
+  allowed before nginx starts rejecting. Over-limit requests get a `429 Too Many Requests`.
+  Five a minute is plenty for a human filling out a form, and this is the first bot defense in
+  front of the ALTCHA proof-of-work.
+- **Visitor identity.** Because Cloudflare sits in front of everything, the limit is keyed on
+  Cloudflare's `CF-Connecting-IP` header — the real client — not the connecting address, which
+  would just be a Cloudflare edge IP. If that header is ever missing (for example a request
+  that reaches nginx without going through Cloudflare), it falls back to the direct address so
+  the request is still limited on its own key rather than sharing one bucket with everyone.
+- **Body cap.** nginx caps request bodies at 16 KB (`client_max_body_size 16k`), matching the
+  app's own `MAX_CONTENT_LENGTH`, so an oversized body is refused at the edge and never reaches
+  the app.
+- **Upstream.** The proxy forwards to `contact-api:8000` over the shared `keepbreath-net`
+  Docker network. The container name is resolved at request time via Docker's embedded DNS, so
+  nginx still starts if this service is down (returning 502 until it comes up) rather than
+  failing to boot on an unresolved upstream.
+
 ## Worker sizing
 
 - **Web (gunicorn):** the standard starting point is `(2 × CPU cores) + 1` workers. Because the
