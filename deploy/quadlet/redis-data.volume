@@ -1,0 +1,9 @@
+# keepbreath.ing — contact API: Redis queue storage
+# Author: Mark Thompson
+#
+# Holds Redis's append-only file so queued sends survive a restart.
+
+[Volume]
+# Names the volume exactly. Without this the generator prefixes the filename
+# and creates systemd-redis-data.
+VolumeName=redis-data
