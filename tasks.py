@@ -29,11 +29,11 @@ from logging_config import configure_logging
 
 log = configure_logging()
 
-# Mail endpoint. Credentials are read at SEND time (inside send_email), NOT at import, so
-# the web app can import this module to enqueue tasks without ever holding the SMTP
-# password. Only the worker, when it actually sends, reads them.
-SMTP_HOST = "mail.keepbreath.ing"
-SMTP_PORT = 587
+# Mail endpoint. The host and port live in WorkerSettings alongside the credentials, so a
+# deployment can point the worker at a different submission port without a code change.
+# All of it is read at SEND time (inside send_email), NOT at import, so the web app can
+# import this module to enqueue tasks without ever holding the SMTP password. Only the
+# worker, when it actually sends, reads them.
 TO_ADDR = "contact@keepbreath.ing"
 FROM_ADDR = "contact@keepbreath.ing"
 
@@ -104,7 +104,7 @@ def build_email(cleaned: dict[str, str]) -> EmailMessage:
 def send_email(msg: EmailMessage) -> None:
     # Credentials come from WorkerSettings, so they live only in the worker's environment.
     s = _worker_settings()
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+    with smtplib.SMTP(s.contact_smtp_host, s.contact_smtp_port, timeout=10) as smtp:
         smtp.starttls(context=_ssl_context())
         smtp.login(s.contact_smtp_user, s.contact_smtp_pass)
         smtp.send_message(msg)

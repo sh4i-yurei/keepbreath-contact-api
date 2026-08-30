@@ -44,3 +44,11 @@ class WorkerSettings(BaseSettings):
 
     contact_smtp_user: str  # the contact@ send-as login
     contact_smtp_pass: str  # its submission password
+
+    # Where the worker submits. The defaults are the public endpoint, so an unconfigured
+    # deployment behaves exactly as before. The droplet overrides the port: DigitalOcean
+    # blocks outbound 25/465/587 between droplets, including inside the VPC, so the worker
+    # reaches Postfix on an unblocked port instead. The host stays a NAME rather than an
+    # address because the TLS certificate is verified against whatever we connect to.
+    contact_smtp_host: str = "mail.keepbreath.ing"
+    contact_smtp_port: int = 587
