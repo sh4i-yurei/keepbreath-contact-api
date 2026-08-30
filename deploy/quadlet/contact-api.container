@@ -41,6 +41,15 @@ Tmpfs=/dev/shm
 NoNewPrivileges=true
 DropCapability=ALL
 
+# podman build writes OCI-format images, and the OCI image spec has no field for
+# a health check, so the Dockerfile's HEALTHCHECK is dropped from the built image.
+# Declared here instead, with the Dockerfile's values.
+HealthCmd=python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+HealthInterval=30s
+HealthTimeout=3s
+HealthStartPeriod=10s
+HealthRetries=3
+
 [Service]
 Restart=always
 MemoryMax=300M
