@@ -86,6 +86,12 @@ EXPOSE 8000
 # Liveness probe — a plain Python request (no need to install curl in the minimal
 # image). If /health can't be reached or returns non-2xx, urlopen raises and the
 # check exits non-zero, so Docker marks the container unhealthy.
+#
+# Honoured when this image is built by Docker, which CI and the old compose box
+# both do. It is NOT honoured under podman build, which writes OCI-format images,
+# and the OCI spec has no health check field — the instruction is recorded in the
+# image history and dropped from the config. deploy/quadlet/contact-api.container
+# declares the same check so the container has one under Podman.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
