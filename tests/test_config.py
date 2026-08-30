@@ -54,3 +54,27 @@ def test_broker_password_not_leaked_in_an_unrelated_config_error(monkeypatch):
     with pytest.raises(ValidationError) as exc:
         WebSettings()
     assert "BROKER_SECRET_PW" not in str(exc.value)
+
+
+def test_worker_smtp_endpoint_defaults_to_the_public_submission_port(monkeypatch):
+    # The defaults exist so an unconfigured deployment behaves exactly as it did before
+    # the endpoint became configurable. If these drift, an old .env starts sending
+    # somewhere new without anyone changing it. Cleared explicitly so the test asserts the
+    # defaults rather than whatever the developer's own environment happens to hold.
+    monkeypatch.delenv("CONTACT_SMTP_HOST", raising=False)
+    monkeypatch.delenv("CONTACT_SMTP_PORT", raising=False)
+    s = WorkerSettings()
+    assert s.contact_smtp_host == "mail.keepbreath.ing"
+    assert s.contact_smtp_port == 587
+
+
+def test_worker_smtp_endpoint_is_overridable_and_the_port_becomes_an_int(monkeypatch):
+    # The droplet overrides the port because DigitalOcean blocks outbound 587 between
+    # droplets. Environment variables arrive as strings, so the coercion to int is the
+    # part worth pinning — smtplib needs a number, not "2587".
+    monkeypatch.setenv("CONTACT_SMTP_HOST", "mail.example.test")
+    monkeypatch.setenv("CONTACT_SMTP_PORT", "2587")
+    s = WorkerSettings()
+    assert s.contact_smtp_host == "mail.example.test"
+    assert s.contact_smtp_port == 2587
+    assert isinstance(s.contact_smtp_port, int)
