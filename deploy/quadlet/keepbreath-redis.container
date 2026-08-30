@@ -1,0 +1,54 @@
+# keepbreath.ing — contact API: Redis broker
+# Author: Mark Thompson
+#
+# The queue between the web app and the worker. No published ports; only the
+# other two containers reach it, over the shared network.
+
+[Unit]
+Description=keepbreath.ing contact API — Redis broker
+
+[Container]
+ContainerName=keepbreath-redis
+
+# Fully qualified and pinned by digest. A bare name makes rootless podman ask
+# which registry to use, and a boot-time service has nobody to answer.
+Image=docker.io/library/redis:7-alpine@sha256:9702d01c1f10c3ea9f48211b4362e44f154ff02d063e6f7268eba804059f53bf
+
+Network=keepbreath-net
+
+# References the .volume unit by filename, which makes systemd create the volume
+# before this container starts.
+Volume=redis-data.volume:/data
+
+# Carries the requirepass line. Mounted rather than passed as an environment
+# variable or an argument, both of which are readable from outside the container.
+# uid/gid match the redis account the image drops to after starting as root;
+# mode overrides the 0444 default.
+Secret=kb-redis-conf,type=mount,target=/run/secrets/redis.conf,uid=999,gid=1000,mode=0400
+
+# Read by redis-cli in the health check below.
+Secret=kb-rediscli-auth,type=env,target=REDISCLI_AUTH
+
+# Reads the mounted file as its config, then applies the overrides. maxmemory
+# caps the queue; noeviction makes a full broker reject new writes, which the web
+# app returns as 503, rather than evicting a queued message to make room.
+Exec=redis-server /run/secrets/redis.conf --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+
+ReadOnly=true
+Tmpfs=/tmp
+NoNewPrivileges=true
+
+# No DropCapability=ALL. The image starts as root and needs CHOWN, SETUID and
+# SETGID to step down to the redis account.
+
+HealthCmd=redis-cli ping
+HealthInterval=10s
+HealthTimeout=3s
+HealthRetries=5
+
+[Service]
+Restart=always
+MemoryMax=300M
+
+[Install]
+WantedBy=default.target

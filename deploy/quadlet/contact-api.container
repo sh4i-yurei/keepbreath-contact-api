@@ -1,0 +1,49 @@
+# keepbreath.ing — contact API: Flask web app
+# Author: Mark Thompson
+#
+# Validates the form, runs the anti-bot check, and enqueues the send. It never
+# sends mail, so it is never given the mail credentials.
+
+[Unit]
+Description=keepbreath.ing contact API — Flask web app
+
+# The broker must exist before this starts. systemd has no equivalent of
+# compose's service_healthy condition; the app retries the broker on connect.
+Requires=keepbreath-redis.service
+After=keepbreath-redis.service
+
+[Container]
+ContainerName=contact-api
+
+# References the .build unit by filename, which builds the image first.
+Image=contact-api.build
+
+Network=keepbreath-net
+Volume=contact-api-data.volume:/data
+
+# The broker URL embeds the Redis password, so it is a secret rather than a
+# setting. The ALTCHA signing key reaches this unit only.
+Secret=kb-broker-url,type=env,target=CELERY_BROKER_URL
+Secret=kb-altcha-key,type=env,target=ALTCHA_HMAC_KEY
+
+Environment=REPLAY_DB_PATH=/data/altcha_replay.db
+
+# tini as PID 1, for signal forwarding and zombie reaping.
+RunInit=true
+
+ReadOnly=true
+
+# Scratch, and gunicorn's --worker-tmp-dir heartbeat file. The read-only root
+# blocks writes everywhere else.
+Tmpfs=/tmp
+Tmpfs=/dev/shm
+
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=always
+MemoryMax=300M
+
+[Install]
+WantedBy=default.target

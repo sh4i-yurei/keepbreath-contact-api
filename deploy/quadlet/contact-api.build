@@ -1,0 +1,18 @@
+# keepbreath.ing — contact API: image build
+# Author: Mark Thompson
+#
+# Builds the image from the repo's Dockerfile. contact-api.container and
+# contact-worker.container reference this unit by filename, which orders the
+# build ahead of them.
+
+[Build]
+ImageTag=localhost/contact-api:latest
+
+# Absolute path, so the unit resolves the same when reached through its symlink
+# in ~/.config/containers/systemd/.
+File=/srv/keepbreath-contact-api/Dockerfile
+
+# Sets the build context to the directory holding File=, the repo root. The
+# Dockerfile's COPY instructions read requirements.txt and the .py sources from
+# there.
+SetWorkingDirectory=file

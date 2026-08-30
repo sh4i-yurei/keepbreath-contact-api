@@ -1,0 +1,63 @@
+# keepbreath.ing — contact API: Celery worker
+# Author: Mark Thompson
+#
+# Pulls sends off the queue and delivers them, retrying transient failures.
+# The only unit given the SMTP password.
+
+[Unit]
+Description=keepbreath.ing contact API — Celery worker
+
+Requires=keepbreath-redis.service
+After=keepbreath-redis.service
+
+[Container]
+ContainerName=contact-worker
+
+# Same image as the web app, different command.
+Image=contact-api.build
+
+Network=keepbreath-net
+
+Secret=kb-broker-url,type=env,target=CELERY_BROKER_URL
+Secret=kb-smtp-pass,type=env,target=CONTACT_SMTP_PASS
+
+# The host is a name, not an address: send_email builds its TLS context with
+# ssl.create_default_context(), which verifies the certificate hostname.
+# Port 2587 because DigitalOcean blocks 25, 465 and 587 between droplets,
+# including inside the VPC.
+Environment=CONTACT_SMTP_USER=contact@keepbreath.ing
+Environment=CONTACT_SMTP_HOST=mail.keepbreath.ing
+Environment=CONTACT_SMTP_PORT=2587
+
+# Resolves that name to the mail box's private address inside this container.
+AddHost=mail.keepbreath.ing:10.128.0.4
+
+# -B embeds Celery Beat, which runs the dead-letter re-drive sweep on its
+# interval. Only one instance may run beat. Its schedule file goes on /tmp
+# because the root filesystem is read-only.
+Exec=celery -A worker.celery worker -B --schedule /tmp/celerybeat-schedule --loglevel=INFO --concurrency=2
+
+RunInit=true
+ReadOnly=true
+
+# HOME=/tmp lives here; billiard, Celery's multiprocessing layer, needs /dev/shm.
+Tmpfs=/tmp
+Tmpfs=/dev/shm
+
+NoNewPrivileges=true
+DropCapability=ALL
+
+# The worker serves no HTTP, so the image's web health check is replaced with a
+# Celery liveness ping over the broker.
+HealthCmd=celery -A celery_app.celery inspect ping -t 5
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+MemoryMax=400M
+
+[Install]
+WantedBy=default.target
