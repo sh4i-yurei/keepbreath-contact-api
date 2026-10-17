@@ -1,0 +1,11 @@
+# Watches the Actions that CI uses. Python packages are managed separately so this grouped weekly
+# update stays limited to CI actions.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
