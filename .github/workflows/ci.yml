@@ -5,14 +5,11 @@
 # gate system into one workflow for this repo:
 #   code-quality  Ruff (lint + format) and mypy (types)
 #   tests         pytest
-#   security      dependency review (warning-only for now). CodeQL runs through GitHub's
-#                 default setup instead; a CodeQL job here would switch this workflow off.
 #   integration   bring the whole stack up with compose and send one message end to end
 name: CI
 
 on:
   push: {}
-  pull_request: {}
 
 permissions:
   contents: read
@@ -51,16 +48,6 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Pytest
         run: pytest -q
-
-  # Warning-only dependency review (pull requests only — it diffs the PR's dependencies).
-  # Requires the repo's Dependency Graph feature to be enabled.
-  dependency-review:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v5
 
   # ----------------------------------------------------------
   # Gate: integration — the unit tests can't catch compose/env mistakes, so bring the

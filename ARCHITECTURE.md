@@ -25,7 +25,8 @@ through the real Compose stack.
 | `logging_config.py` | One structured JSON log format for both processes | Imported by the web app and the worker | — | Log message content or secrets |
 | `Dockerfile`, `docker-compose.yml`, `deploy/` | Build the image and run the web app, worker and Redis together | Compose services and the Quadlet units under `deploy/` | — | Hold a secret; the `.env` file is never committed |
 | `tests/` | Unit tests for the web app, validation, replay, tasks and worker | `pytest -q` | — | Reach a real mail server or a real Redis; fakeredis stands in for it |
-| `.github/workflows/ci.yml` | Run the code checks, the unit tests, dependency review on pull requests, and the Compose integration test | GitHub Actions on every push and every pull request | A failed job blocks the merge | Use real secrets; the integration test writes a throwaway `.env` with dummy values |
+| `.github/workflows/ci.yml` | Run the code checks, the unit tests, and the Compose integration test | GitHub Actions on every push | A failed job blocks the merge | Use real secrets; the integration test writes a throwaway `.env` with dummy values |
+| `.github/workflows/dependency-review.yml` | Run advisory dependency review | GitHub Actions on pull requests only | A failed review is advisory | Use real secrets |
 
 ## Rules every piece follows
 
