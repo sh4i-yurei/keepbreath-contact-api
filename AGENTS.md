@@ -8,6 +8,6 @@ is `ruff check . && ruff format --check . && mypy . && pytest -q && git diff --c
 `pip install --require-hashes -r requirements.lock` and then `pip install -r requirements-dev.txt`
 as separate commands. CI runs the same code checks and unit tests on every push
 to every branch. It also builds the Compose stack and sends one test request with dummy values to
-check processing end to end. Dependency review runs on pull requests. CodeQL and dependency review
+check processing end to end. Its unit-files job runs the tests marked `quadlet`, which the default `pytest` run leaves out; from the dev container, run them with `ENGINE="distrobox-host-exec podman" python -m pytest -q -m quadlet`. Dependency review runs on pull requests. CodeQL and dependency review
 are advisory. Scope
 integration tests carefully, because a production contact submission sends real mail.

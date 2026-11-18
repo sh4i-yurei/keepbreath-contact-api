@@ -35,7 +35,7 @@ def test_ci_jobs_keep_the_required_names_and_ordering() -> None:
     workflow = WORKFLOW.read_text()
     jobs = re.findall(r"^  ([a-z-]+):$", workflow, re.MULTILINE)
 
-    assert jobs == ["code-quality", "tests", "integration"]
+    assert jobs == ["code-quality", "tests", "integration", "unit-files"]
     integration = workflow.split("\n  integration:\n", 1)[1]
     assert "    needs: [code-quality, tests]\n" in integration
 
@@ -54,3 +54,17 @@ def test_ci_installs_lock_before_test_tools_and_checks_the_image() -> None:
     assert exact in integration
     assert integration.index("Smoke — enqueue one message") < integration.index(exact)
     assert integration.index(exact) < integration.index("name: Tear down")
+
+
+def test_unit_files_job_runs_the_quadlet_tests_with_docker() -> None:
+    workflow = WORKFLOW.read_text()
+    assert "\n  unit-files:\n" in workflow
+    job = workflow.split("\n  unit-files:\n", 1)[1]
+    assert "    runs-on: ubuntu-latest\n" in job
+    lock = "      - run: pip install --require-hashes -r requirements.lock\n"
+    dev = "      - run: pip install -r requirements-dev.txt\n"
+    assert lock in job
+    assert dev in job
+    assert job.index(lock) < job.index(dev)
+    assert "        run: pytest -q -m quadlet\n" in job
+    assert "          ENGINE: docker\n" in job
