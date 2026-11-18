@@ -190,6 +190,7 @@ Unit tests cover the retry/dead-letter classification and the task's success and
 They run the task in-process (Celery "eager" mode), so no Redis or worker is needed:
 
 ```
+pip install --require-hashes -r requirements.lock
 pip install -r requirements-dev.txt
 pytest
 ```
@@ -200,10 +201,21 @@ CI runs four gates: Ruff (lint + format), mypy (types), pytest, and a compose in
 smoke. Run the same checks locally before pushing so nothing is a surprise:
 
 ```
+pip install --require-hashes -r requirements.lock
 pip install -r requirements-dev.txt
 ruff check . && ruff format --check .
 mypy .
 pytest
+```
+
+`requirements.txt` names the direct runtime dependencies. `requirements.lock` pins every runtime
+package and its hashes, including transitive dependencies. To regenerate the committed lock after
+changing a direct pin in `requirements.txt`, run this from the repository root. The same command
+leaves an unchanged lock byte for byte identical. If the lock is lost or damaged, restore it from
+git before regenerating it.
+
+```
+docker run --rm -v "$PWD":/work -w /work python:3.13-alpine@sha256:42825e7ec3437b3bce923c237484eb23d32128476e18307d2f48951bf86f1db2 sh -c 'pip install -q pip-tools==7.7.0 && pip-compile --generate-hashes --strip-extras --no-header --annotation-style=line --output-file requirements.lock requirements.txt'
 ```
 
 The type checker is intentionally lenient (`ignore_missing_imports`) because Flask, Celery,

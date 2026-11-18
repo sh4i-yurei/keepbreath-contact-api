@@ -26,6 +26,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - run: pip install --require-hashes -r requirements.lock
       - run: pip install -r requirements-dev.txt
       - name: Ruff lint
         run: ruff check .
@@ -45,6 +46,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - run: pip install --require-hashes -r requirements.lock
       - run: pip install -r requirements-dev.txt
       - name: Pytest
         run: pytest -q
@@ -99,6 +101,8 @@ jobs:
             sleep 2
           done
           echo "message was never processed"; docker compose logs; exit 1
+      - name: Check exact runtime packages in the image
+        run: docker compose exec -T contact-api python - --exact /app/requirements.lock < scripts/check_lock.py
       - name: Tear down
         if: always()
         # || true so a failed 'up' (nothing to tear down) can't fail this always() step.
