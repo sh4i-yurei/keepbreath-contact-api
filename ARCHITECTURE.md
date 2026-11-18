@@ -9,7 +9,7 @@ The contact form on keepbreath.ing posts JSON to this API. The web process valid
 submission and checks it for bots, then puts the send on a Redis queue and answers 202 at once. A
 separate Celery worker takes the send off the queue, builds the email and delivers it through the
 mail server, retrying and shelving failures so no message is silently lost. The README describes
-the delivery model in full. CI runs the code checks, the unit tests and one end-to-end message
+the delivery model in full. CI runs the code checks, the unit tests, one end-to-end message
 through the real Compose stack, and the quadlet tests, which check what Quadlet generates from the unit files. The image installs the hashed runtime lock, and CI checks the
 installed packages against it after the test tools install and inside the built image.
 
