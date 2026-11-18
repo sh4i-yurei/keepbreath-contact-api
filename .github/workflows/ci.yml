@@ -6,6 +6,7 @@
 #   code-quality  Ruff (lint + format) and mypy (types)
 #   tests         pytest
 #   integration   bring the whole stack up with compose and send one message end to end
+#   unit-files    run the quadlet tests: what Quadlet generates from deploy/quadlet
 name: CI
 
 on:
@@ -107,3 +108,23 @@ jobs:
         if: always()
         # || true so a failed 'up' (nothing to tear down) can't fail this always() step.
         run: docker compose down -v || true
+
+  # ----------------------------------------------------------
+  # Gate: unit files — the quadlet tests run Quadlet from the pinned Podman 5.8.2 image, the
+  # version web runs, on deploy/quadlet with no drop-in and with web's and staging's relay
+  # drop-ins. Docker runs the image here; the laptop runs the same image with Podman.
+  # ----------------------------------------------------------
+  unit-files:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install --require-hashes -r requirements.lock
+      - run: pip install -r requirements-dev.txt
+      - name: Check what Quadlet generates from the unit files
+        run: pytest -q -m quadlet
+        env:
+          ENGINE: docker

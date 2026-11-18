@@ -10,7 +10,7 @@ submission and checks it for bots, then puts the send on a Redis queue and answe
 separate Celery worker takes the send off the queue, builds the email and delivers it through the
 mail server, retrying and shelving failures so no message is silently lost. The README describes
 the delivery model in full. CI runs the code checks, the unit tests and one end-to-end message
-through the real Compose stack. The image installs the hashed runtime lock, and CI checks the
+through the real Compose stack, and the quadlet tests, which check what Quadlet generates from the unit files. The image installs the hashed runtime lock, and CI checks the
 installed packages against it after the test tools install and inside the built image.
 
 ## The pieces
@@ -24,10 +24,10 @@ installed packages against it after the test tools install and inside the built 
 | `celery_app.py`, `worker.py` | The Celery application, and the worker's entry point that checks its environment first | `celery -A worker.celery` | Stops at startup on a missing credential or broker address | Be imported by the web app |
 | `tasks.py` | The send task, its retries, the dead-letter shelf, the scheduled re-drive and the retention backstop | Celery task enqueued by `app.py` | Shelves a failed send with its reason; drops only a malformed message or one past the age limit, and logs it | Give up on a deliverable message |
 | `logging_config.py` | One structured JSON log format for both processes | Imported by the web app and the worker | — | Log message content or secrets |
-| `Dockerfile`, `docker-compose.yml`, `deploy/` | Build the image from `requirements.lock` and run the web app, worker and Redis together | Compose services and the Quadlet units under `deploy/` | — | Hold a secret; the `.env` file is never committed |
+| `Dockerfile`, `docker-compose.yml`, `deploy/` | Build the image from `requirements.lock` and run the web app, worker and Redis together | Compose services and the Quadlet units under `deploy/` | — | Hold a secret, because the `.env` file is never committed; or set the worker's mail relay, which the deploying role's drop-in supplies |
 | `requirements.lock`, `scripts/check_lock.py` | Pin and check every runtime Python package | Hashed pip requirements; `python - --exact /app/requirements.lock < scripts/check_lock.py` in the image | Reports package differences and exits 1 | Add test tools to the runtime image |
-| `tests/` | Unit tests for the web app, validation, replay, tasks, worker and package lock (`test_lock.py`) | `pytest -q` | — | Reach a real mail server or a real Redis; fakeredis stands in for it |
-| `.github/workflows/ci.yml` | Run the code checks, unit tests, Compose integration test and exact image package check | GitHub Actions on every push | A failed job blocks the merge | Use real secrets; the integration test writes a throwaway `.env` with dummy values |
+| `tests/` | Unit tests for the web app, validation, replay, tasks, worker and package lock (`test_lock.py`), and, marked `quadlet`, what Quadlet generates from `deploy/quadlet/` (`test_quadlet_units.py`) | `pytest -q`; the quadlet tests with `pytest -m quadlet` and a container engine named by `ENGINE` | — | Reach a real mail server or a real Redis; fakeredis stands in for it |
+| `.github/workflows/ci.yml` | Run the code checks, unit tests, Compose integration test, exact image package check and quadlet tests | GitHub Actions on every push | A failed job blocks the merge | Use real secrets; the integration test writes a throwaway `.env` with dummy values |
 | `.github/workflows/dependency-review.yml` | Run advisory dependency review | GitHub Actions on pull requests only | A failed review is advisory | Use real secrets |
 
 ## Rules every piece follows

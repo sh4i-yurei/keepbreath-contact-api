@@ -197,8 +197,7 @@ pytest
 
 ## Development
 
-CI runs four gates: Ruff (lint + format), mypy (types), pytest, and a compose integration
-smoke. Run the same checks locally before pushing so nothing is a surprise:
+CI runs five gates: Ruff (lint + format), mypy (types), pytest, a compose integration smoke, and the quadlet tests, which check what Quadlet generates from the unit files. Run the same checks locally before pushing so nothing is a surprise:
 
 ```
 pip install --require-hashes -r requirements.lock

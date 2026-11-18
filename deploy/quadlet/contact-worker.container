@@ -21,16 +21,11 @@ Network=keepbreath-net
 Secret=kb-broker-url,type=env,target=CELERY_BROKER_URL
 Secret=kb-smtp-pass,type=env,target=CONTACT_SMTP_PASS
 
-# The host is a name, not an address: send_email builds its TLS context with
-# ssl.create_default_context(), which verifies the certificate hostname.
-# Port 2587 because DigitalOcean blocks 25, 465 and 587 between droplets,
-# including inside the VPC.
-Environment=CONTACT_SMTP_USER=contact@keepbreath.ing
-Environment=CONTACT_SMTP_HOST=mail.keepbreath.ing
-Environment=CONTACT_SMTP_PORT=2587
-
-# Resolves that name to the mail box's private address inside this container.
-AddHost=mail.keepbreath.ing:10.128.0.4
+# The mail relay isn't set here. The role that deploys this unit writes a
+# drop-in, contact-worker.container.d/50-relay.conf, with CONTACT_SMTP_HOST,
+# CONTACT_SMTP_PORT, CONTACT_SMTP_USER and the AddHost= pin for the relay's name.
+# A drop-in can replace this unit's Environment= values, but its AddHost= is
+# added beside this unit's own, so a pin here would reach every deployment.
 
 # -B embeds Celery Beat, which runs the dead-letter re-drive sweep on its
 # interval. Only one instance may run beat. Its schedule file goes on /tmp
