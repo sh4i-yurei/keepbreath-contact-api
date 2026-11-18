@@ -28,17 +28,17 @@ def main(argv: list[str] | None = None) -> int:
         normalized(distribution.metadata["Name"]): distribution.version
         for distribution in importlib.metadata.distributions()
     }
-    mismatches = 0
+    failed = False
     for name, version in sorted(locked.items()):
         actual = installed.get(name)
         if actual != version:
             print(f"{name}: locked {version}, installed {actual or 'nothing'}")
-            mismatches += 1
+            failed = True
     if args.exact:
         for name in sorted(installed.keys() - locked.keys()):
             print(f"{name}: installed {installed[name]}, not in the lock")
-            mismatches += 1
-    return int(mismatches != 0)
+            failed = True
+    return int(failed)
 
 
 if __name__ == "__main__":
