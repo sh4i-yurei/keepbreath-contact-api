@@ -13,6 +13,6 @@ ImageTag=localhost/contact-api:latest
 File=/srv/keepbreath-contact-api/Dockerfile
 
 # Sets the build context to the directory holding File=, the repo root. The
-# Dockerfile's COPY instructions read requirements.txt and the .py sources from
+# Dockerfile's COPY instructions read requirements.lock and the .py sources from
 # there.
 SetWorkingDirectory=file

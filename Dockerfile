@@ -34,15 +34,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 # ------------------------------------------------------------
 # DEPENDENCIES
-# Copy requirements first and install, so Docker caches this layer and doesn't
+# Copy the hash-pinned lock first and install, so Docker caches this layer and doesn't
 # reinstall every time the app code changes. Then delete pip, setuptools, and
 # wheel: those are only needed to *install* packages, never to *run* the app, so
 # leaving them in the final image would just carry their vulnerabilities for no
 # benefit. (This is what clears the last few findings the base image can't.)
 # ------------------------------------------------------------
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+COPY requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
     && rm -rf /usr/local/lib/python3.13/site-packages/pip* \
               /usr/local/lib/python3.13/site-packages/setuptools* \
               /usr/local/lib/python3.13/site-packages/pkg_resources \
