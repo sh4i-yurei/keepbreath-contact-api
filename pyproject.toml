@@ -26,4 +26,4 @@ testpaths = ["tests"]
 # The quadlet tests need a container engine, so the default run leaves them out. CI's
 # unit-files job runs them with `pytest -m quadlet`, which overrides this default.
 addopts = ["-m", "not quadlet"]
-markers = ["quadlet: runs Quadlet from the pinned Podman image through the engine named by ENGINE"]
+markers = ["quadlet: runs Quadlet from the pinned Podman images through the engine named by ENGINE"]
